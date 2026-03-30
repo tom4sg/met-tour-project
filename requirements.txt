@@ -1,0 +1,14 @@
+# Core app (Streamlit search UI — add ML/search libs as you implement)
+streamlit>=1.40,<2
+python-dotenv>=1.0,<2
+
+# Notebooks / exploration
+jupyter>=1.0,<2
+ipykernel>=6.29,<7
+
+# Hugging Face — text embeddings + CLIP (image–text)
+torch>=2.2,<3
+transformers>=4.40,<5
+sentence-transformers>=3.0,<4
+pillow>=10.0,<12
+accelerate>=0.30,<1
