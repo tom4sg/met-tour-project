@@ -2,9 +2,10 @@
 streamlit>=1.40,<2
 python-dotenv>=1.0,<2
 
-# notebooks
+# notebooks / data
 jupyter>=1.0,<2
 ipykernel>=6.29,<7
+pandas>=2.0,<3
 
 # hugging face
 torch>=2.2,<3
