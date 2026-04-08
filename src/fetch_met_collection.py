@@ -10,9 +10,15 @@ the CSV every ``--chunk`` new rows so a long run does not lose progress if it st
 **Resume:** On start, reads every ``objectID`` already in ``--out`` and skips those IDs
 (so you can re-run the same command; it continues where it left off).
 
-**Direction:** ``--direction forward`` walks the API ID list from the beginning (default).
-``--direction reverse`` walks from the end: with ``--limit N``, uses the **last N** IDs and
-fetches from highest toward lower within that window; without ``--limit``, reverses the full list.
+**Direction:** ``--direction forward`` walks the current ID list from the beginning (default).
+``--direction reverse`` walks from the end: with ``--limit N``, uses the **last N** IDs in that
+list and fetches from the end of the window toward the start; without ``--limit``, reverses
+the full list.
+
+**Group:** ``--group`` is required: ``1``–``5`` or ``ALL``. For ``1``–``5``, object IDs come from
+``--groups-csv`` (default ``data/processed/met_object_id_groups.csv``); ``forward`` / ``reverse``
+/ ``--limit`` apply only within that group’s IDs (CSV row order). For ``ALL``, IDs come from the
+API listing; direction/limit apply to the full list as before.
 
 Rate: Met asks for at most ~80 requests per second; use ``--rps`` (default 75).
 """
@@ -104,6 +110,42 @@ def flatten(obj: dict) -> dict:
     return row
 
 
+def apply_direction_and_limit(
+    ids: list[int],
+    *,
+    direction: str,
+    limit: int | None,
+) -> list[int]:
+    """Slice and/or reverse ``ids`` (API order or group CSV order)."""
+    if limit is not None:
+        if direction == "reverse":
+            return list(reversed(ids[-limit:]))
+        return ids[:limit]
+    if direction == "reverse":
+        return list(reversed(ids))
+    return ids
+
+
+def load_object_ids_for_group(path: Path, group: int) -> list[int]:
+    """Load object IDs for one group from split_met_object_ids CSV (preserves file order)."""
+    if not path.exists():
+        raise FileNotFoundError(f"Groups CSV not found: {path}")
+    out: list[int] = []
+    with path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames or "objectID" not in reader.fieldnames or "group" not in reader.fieldnames:
+            raise ValueError(f"Groups CSV must have objectID and group columns: {path}")
+        for row in reader:
+            try:
+                g = int(row["group"])
+                oid = int(row["objectID"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if g == group:
+                out.append(oid)
+    return out
+
+
 def existing_ids_and_columns(path: Path) -> tuple[set[int], list[str] | None]:
     if not path.exists() or path.stat().st_size == 0:
         return set(), None
@@ -122,8 +164,33 @@ def existing_ids_and_columns(path: Path) -> tuple[set[int], list[str] | None]:
     return ids, cols
 
 
+def _parse_group_arg(value: str) -> int | str:
+    t = value.strip().upper()
+    if t == "ALL":
+        return "ALL"
+    try:
+        n = int(t, 10)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError("must be 1–5 or ALL") from e
+    if n not in (1, 2, 3, 4, 5):
+        raise argparse.ArgumentTypeError("numeric group must be 1, 2, 3, 4, or 5")
+    return n
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Met Collection API → CSV (all objects)")
+    p.add_argument(
+        "--group",
+        type=_parse_group_arg,
+        required=True,
+        help="Shard to fetch: 1–5 (uses --groups-csv) or ALL (full API object ID list)",
+    )
+    p.add_argument(
+        "--groups-csv",
+        type=Path,
+        default=Path("data/processed/met_object_id_groups.csv"),
+        help="objectID→group mapping; required for --group 1–5",
+    )
     p.add_argument(
         "--out",
         type=Path,
@@ -134,13 +201,13 @@ def main() -> int:
         "--limit",
         type=int,
         default=None,
-        help="With forward: first N IDs. With reverse: last N IDs from the API list (e.g. 10000)",
+        help="With forward: first N IDs in scope. With reverse: last N in scope (e.g. 10000)",
     )
     p.add_argument(
         "--direction",
         choices=("forward", "reverse"),
         default="forward",
-        help="forward = start from beginning of API list; reverse = start from end (see help)",
+        help="Within current scope (group or ALL): forward = start of list; reverse = end of list",
     )
     p.add_argument(
         "--chunk",
@@ -168,20 +235,40 @@ def main() -> int:
 
     limiter = RateLimiter(args.rps)
 
-    print("Fetching object ID list…", file=sys.stderr)
-    listing = fetch_json(f"{BASE}/objects", limiter=limiter)
-    ids: list[int] = listing["objectIDs"]
-    print(f"  total in response: {len(ids)} (API total field: {listing.get('total')})", file=sys.stderr)
+    if args.group == "ALL":
+        print("Fetching object ID list…", file=sys.stderr)
+        listing = fetch_json(f"{BASE}/objects", limiter=limiter)
+        ids: list[int] = listing["objectIDs"]
+        print(f"  total in response: {len(ids)} (API total field: {listing.get('total')})", file=sys.stderr)
+    else:
+        gnum = args.group
+        assert isinstance(gnum, int)
+        try:
+            ids = load_object_ids_for_group(args.groups_csv, gnum)
+        except FileNotFoundError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+        if not ids:
+            print(
+                f"Error: no object IDs for group {gnum} in {args.groups_csv} (regenerate with split_met_object_ids.py).",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            f"  group={gnum}  ·  loaded {len(ids)} IDs from {args.groups_csv} (API order within group)",
+            file=sys.stderr,
+        )
 
-    if args.limit is not None:
-        if args.direction == "reverse":
-            ids = list(reversed(ids[-args.limit :]))
-        else:
-            ids = ids[: args.limit]
-    elif args.direction == "reverse":
-        ids = list(reversed(ids))
+    ids = apply_direction_and_limit(ids, direction=args.direction, limit=args.limit)
 
-    print(f"  direction={args.direction!r}  ·  will consider {len(ids)} IDs (before resume skips)", file=sys.stderr)
+    scope = "ALL" if args.group == "ALL" else str(args.group)
+    print(
+        f"  scope={scope}  direction={args.direction!r}  ·  will consider {len(ids)} IDs (before resume skips)",
+        file=sys.stderr,
+    )
 
     done, header_cols = existing_ids_and_columns(args.out)
     if done:
