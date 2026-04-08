@@ -168,14 +168,34 @@ def image_url(
     return None
 
 
+_MET_IMAGE_HEADERS = {
+    # Met / Akamai often return 403 for bare urllib / minimal bots
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    "Referer": "https://www.metmuseum.org/",
+}
+
+
 def load_pil_image(url: str, *, timeout: float = 60.0) -> Image.Image | None:
     """Download image and return RGB PIL image, or None on failure."""
     if not url or not str(url).strip():
         return None
-    req = Request(
-        url.strip(),
-        headers={"User-Agent": "Mozilla/5.0 (compatible; MetEmbed/1.0)"},
-    )
+    url = str(url).strip()
+
+    try:
+        import requests
+
+        r = requests.get(url, headers=_MET_IMAGE_HEADERS, timeout=timeout)
+        r.raise_for_status()
+        im = Image.open(BytesIO(r.content)).convert("RGB")
+        return im
+    except Exception:
+        pass
+
+    req = Request(url, headers=_MET_IMAGE_HEADERS)
     try:
         with urlopen(req, timeout=timeout) as resp:
             data = resp.read()

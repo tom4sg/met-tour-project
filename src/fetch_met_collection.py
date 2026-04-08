@@ -4,11 +4,17 @@ Fetch every object from the Met Collection API:
   1) GET /public/collection/v1/objects  → all objectIDs
   2) GET /public/collection/v1/objects/{id} → one record each
 
-Writes CSV in chunks (nested list/dict fields → JSON strings). Resume: skips IDs
-already present in the output file.
+Writes CSV in chunks (nested list/dict fields → JSON strings). Default: append to
+the CSV every ``--chunk`` new rows so a long run does not lose progress if it stops.
 
-Rate: Met asks for at most ~80 requests per second; this script spaces requests evenly
-(default 75/s) so bursts do not trip WAF (403). Use --rps to lower further if needed.
+**Resume:** On start, reads every ``objectID`` already in ``--out`` and skips those IDs
+(so you can re-run the same command; it continues where it left off).
+
+**Direction:** ``--direction forward`` walks the API ID list from the beginning (default).
+``--direction reverse`` walks from the end: with ``--limit N``, uses the **last N** IDs and
+fetches from highest toward lower within that window; without ``--limit``, reverses the full list.
+
+Rate: Met asks for at most ~80 requests per second; use ``--rps`` (default 75).
 """
 
 from __future__ import annotations
@@ -124,8 +130,25 @@ def main() -> int:
         default=Path("data/processed/met_collection_api.csv"),
         help="Output CSV path",
     )
-    p.add_argument("--limit", type=int, default=None, help="Only fetch first N IDs (test)")
-    p.add_argument("--chunk", type=int, default=500, help="Flush to disk every N rows")
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="With forward: first N IDs. With reverse: last N IDs from the API list (e.g. 10000)",
+    )
+    p.add_argument(
+        "--direction",
+        choices=("forward", "reverse"),
+        default="forward",
+        help="forward = start from beginning of API list; reverse = start from end (see help)",
+    )
+    p.add_argument(
+        "--chunk",
+        type=int,
+        default=100,
+        metavar="N",
+        help="Append to CSV every N new rows (checkpoint; default 100)",
+    )
     p.add_argument(
         "--rps",
         type=float,
@@ -151,7 +174,14 @@ def main() -> int:
     print(f"  total in response: {len(ids)} (API total field: {listing.get('total')})", file=sys.stderr)
 
     if args.limit is not None:
-        ids = ids[: args.limit]
+        if args.direction == "reverse":
+            ids = list(reversed(ids[-args.limit :]))
+        else:
+            ids = ids[: args.limit]
+    elif args.direction == "reverse":
+        ids = list(reversed(ids))
+
+    print(f"  direction={args.direction!r}  ·  will consider {len(ids)} IDs (before resume skips)", file=sys.stderr)
 
     done, header_cols = existing_ids_and_columns(args.out)
     if done:
@@ -211,7 +241,10 @@ def main() -> int:
 
         if len(buffer) >= args.chunk:
             flush()
-            print(f"  fetched {n_ok} new rows…", file=sys.stderr)
+            print(
+                f"  checkpoint: wrote {args.chunk} rows to disk (total new this run: {n_ok}) → {args.out}",
+                file=sys.stderr,
+            )
 
     flush()
     print(
@@ -220,7 +253,6 @@ def main() -> int:
         file=sys.stderr,
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
