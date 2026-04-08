@@ -33,20 +33,31 @@ _HTTP_HEADERS = {
 
 
 class RateLimiter:
-    """Enforce a minimum interval between calls."""
+    """Enforce a minimum interval between calls, with adaptive slowdown on 403s."""
 
     def __init__(self, max_rps: float) -> None:
-        self._min_interval = 1.0 / max_rps if max_rps > 0 else 0.0
+        self._target_interval = 1.0 / max_rps if max_rps > 0 else 0.0
+        self._interval = self._target_interval
         self._last = 0.0
 
     def wait(self) -> None:
-        if self._min_interval <= 0:
+        if self._interval <= 0:
             return
         now = time.monotonic()
-        gap = self._last + self._min_interval - now
+        gap = self._last + self._interval - now
         if gap > 0:
             time.sleep(gap)
         self._last = time.monotonic()
+
+    def on_403(self) -> None:
+        """Double the interval (halve effective RPS) up to a max of 30s between requests."""
+        self._interval = min(30.0, self._interval * 2)
+        print(f"  rate limiter slowed to {1/self._interval:.2f} req/s", file=sys.stderr)
+
+    def on_success(self) -> None:
+        """Nudge interval back toward target by 10% each successful request."""
+        if self._interval > self._target_interval:
+            self._interval = max(self._target_interval, self._interval * 0.9)
 
 
 def fetch_json(
@@ -75,6 +86,7 @@ def fetch_json(
                 )
                 time.sleep(wait)
                 if limiter is not None:
+                    limiter.on_403()
                     limiter.wait()
                 continue
             raise
@@ -211,6 +223,7 @@ def main() -> int:
             n_skip += 1
             continue
 
+        limiter.on_success()
         write_row(flatten(data))
         n_ok += 1
         if n_ok % 100 == 0:
