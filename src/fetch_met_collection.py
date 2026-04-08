@@ -59,6 +59,8 @@ def fetch_json(
     retries: int = 6,
 ) -> dict:
     """GET JSON with retries for rate limits (403/429), SSL handshake timeouts, and other transient network errors."""
+    # Keep all API calls going through one helper so rate limiting and retries
+    # behave the same for the ID-list request and each object detail request.
     if limiter is not None:
         limiter.wait()
     attempts = max(1, retries)
@@ -87,6 +89,7 @@ def fetch_json(
 
 
 def flatten(obj: dict) -> dict:
+    # CSV cells must be scalar values, so nested API fields are serialized to JSON.
     row: dict = {}
     for k, v in obj.items():
         if isinstance(v, (list, dict)):
@@ -99,6 +102,8 @@ def flatten(obj: dict) -> dict:
 
 
 def existing_ids_and_columns(path: Path) -> tuple[set[int], list[str] | None]:
+    # Resume support: if the output CSV already exists, read the objectIDs we
+    # have already written so the fetch loop can skip them.
     if not path.exists() or path.stat().st_size == 0:
         return set(), None
     ids: set[int] = set()
@@ -117,12 +122,31 @@ def existing_ids_and_columns(path: Path) -> tuple[set[int], list[str] | None]:
 
 
 def main() -> int:
+    # CLI arguments control output path, whether to fetch only on-view objects,
+    # optional sharding across multiple machines, and fetch/write pacing.
     p = argparse.ArgumentParser(description="Met Collection API → CSV (all objects)")
     p.add_argument(
         "--out",
         type=Path,
-        default=Path("data/processed/met_collection_api.csv"),
+        default=None,
         help="Output CSV path",
+    )
+    p.add_argument(
+        "--on-view-only",
+        action="store_true",
+        help="Fetch only object IDs currently on view",
+    )
+    p.add_argument(
+        "--part",
+        type=int,
+        default=None,
+        help="1-indexed shard number to process from the fetched ID list",
+    )
+    p.add_argument(
+        "--total-parts",
+        type=int,
+        default=None,
+        help="Total number of shards to split the fetched ID list into",
     )
     p.add_argument("--limit", type=int, default=None, help="Only fetch first N IDs (test)")
     p.add_argument("--chunk", type=int, default=500, help="Flush to disk every N rows")
@@ -134,6 +158,17 @@ def main() -> int:
         help="Max requests per second (Met policy: ≤80; default 75 for safety)",
     )
     args = p.parse_args()
+    out_explicit = args.out is not None
+
+    # If the user does not provide --out, choose a default filename. Sharded
+    # runs get a shard-specific filename so each laptop writes to a different CSV.
+    if args.out is None:
+        if args.part is not None and args.total_parts is not None:
+            args.out = Path(
+                f"data/processed/met_collection_api_part{args.part}of{args.total_parts}.csv"
+            )
+        else:
+            args.out = Path("data/processed/met_collection_api.csv")
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     if args.rps > 80:
@@ -142,15 +177,49 @@ def main() -> int:
     if args.rps <= 0:
         print("Error: --rps must be positive.", file=sys.stderr)
         return 2
+    if (args.part is None) != (args.total_parts is None):
+        print("Error: --part and --total-parts must be provided together.", file=sys.stderr)
+        return 2
+    if args.total_parts is not None and args.total_parts < 1:
+        print("Error: --total-parts must be at least 1.", file=sys.stderr)
+        return 2
+    if args.part is not None and not (1 <= args.part <= args.total_parts):
+        print("Error: --part must be between 1 and --total-parts.", file=sys.stderr)
+        return 2
 
+    # One limiter instance is reused for the whole run so requests stay evenly spaced.
     limiter = RateLimiter(args.rps)
 
     print("Fetching object ID list…", file=sys.stderr)
-    listing = fetch_json(f"{BASE}/objects", limiter=limiter)
+    listing_url = f"{BASE}/objects"
+    if args.on_view_only:
+        # Priority mode: ask the API for the smaller "currently on view" ID set.
+        listing_url = f"{listing_url}?isOnView=true"
+    listing = fetch_json(listing_url, limiter=limiter)
     ids: list[int] = listing["objectIDs"]
     print(f"  total in response: {len(ids)} (API total field: {listing.get('total')})", file=sys.stderr)
 
+    if args.part is not None and args.total_parts is not None:
+        # Split the fetched ID list into roughly equal contiguous slices.
+        # Example with 5 parts:
+        #   part 1 => [0 : 1/5 of list)
+        #   part 2 => [1/5 : 2/5 of list)
+        #   ...
+        #
+        # This is the section to change if you ever want a different sharding
+        # strategy than the current "equal contiguous ranges" approach.
+        start = ((args.part - 1) * len(ids)) // args.total_parts
+        end = (args.part * len(ids)) // args.total_parts
+        ids = ids[start:end]
+        if not out_explicit:
+            print(
+                f"  processing part {args.part}/{args.total_parts}: indices [{start}:{end})",
+                file=sys.stderr,
+            )
+
     if args.limit is not None:
+        # Optional testing shortcut after sharding: fetch only the first N IDs
+        # from this run's assigned slice.
         ids = ids[: args.limit]
 
     done, header_cols = existing_ids_and_columns(args.out)
@@ -162,6 +231,8 @@ def main() -> int:
 
     def flush() -> None:
         nonlocal fieldnames, buffer
+        # Write buffered rows to disk in batches so the script does not keep
+        # everything in memory and can resume from partial progress later.
         if not buffer:
             return
         if fieldnames is None:
@@ -181,6 +252,7 @@ def main() -> int:
     n_skip = 0
     n_fail = 0
     for i, oid in enumerate(ids):
+        # Resume behavior: skip IDs already present in the current output CSV.
         if oid in done:
             n_skip += 1
             continue
@@ -203,6 +275,7 @@ def main() -> int:
             n_skip += 1
             continue
 
+        # Flatten the API payload into a one-row CSV record.
         row = flatten(data)
         if fieldnames is None:
             fieldnames = sorted(row.keys())
@@ -210,6 +283,7 @@ def main() -> int:
         n_ok += 1
 
         if len(buffer) >= args.chunk:
+            # Periodic flush keeps the output file current during long runs.
             flush()
             print(f"  fetched {n_ok} new rows…", file=sys.stderr)
 
