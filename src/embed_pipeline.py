@@ -37,6 +37,9 @@ except ImportError:
 
 DEFAULT_TEXT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_CLIP_MODEL = "openai/clip-vit-base-patch32"
+KNOWN_CLIP_PROJECTION_DIMS = {
+    DEFAULT_CLIP_MODEL: 512,
+}
 DEFAULT_METADATA_COLUMNS = [
     "objectID",
     "title",
@@ -85,6 +88,7 @@ def build_embedding_dataframe(df: pd.DataFrame, *, prefer_image_field: str) -> p
         lambda row: image_url(row, prefer=prefer_image_field),
         axis=1,
     )
+    out["has_image_url"] = out["embed_image_url"].fillna("").astype(str).str.strip().ne("")
     return out
 
 
@@ -116,6 +120,21 @@ def load_clip(model_name: str, device: str) -> tuple[CLIPModel, AutoProcessor]:
     return model, processor
 
 
+def resolve_clip_projection_dim(model_name: str, *, clip_dim: int | None = None) -> int:
+    """Resolve the CLIP projection dimension without loading the model when possible."""
+    if clip_dim is not None:
+        if clip_dim <= 0:
+            raise ValueError("--clip-dim must be positive when provided")
+        return clip_dim
+    known = KNOWN_CLIP_PROJECTION_DIMS.get(model_name)
+    if known is not None:
+        return known
+    raise ValueError(
+        "Unknown CLIP projection dimension for model "
+        f"{model_name!r}. Pass --clip-dim to use --skip-images without loading CLIP."
+    )
+
+
 def embed_clip_images(
     image_urls: Sequence[str | None],
     *,
@@ -123,11 +142,15 @@ def embed_clip_images(
     batch_size: int,
     device: str,
     timeout: float,
-) -> np.ndarray:
-    """Encode artwork images with CLIP, leaving missing images as zero vectors."""
+) -> tuple[np.ndarray, list[str]]:
+    """Encode artwork images with CLIP and record per-row embedding status."""
     model, processor = load_clip(model_name, device)
     dim = int(model.config.projection_dim)
     vectors = np.zeros((len(image_urls), dim), dtype=np.float32)
+    statuses = [
+        "missing_url" if not url or not str(url).strip() else "pending"
+        for url in image_urls
+    ]
 
     for start, batch_urls in batched(list(image_urls), batch_size):
         images = []
@@ -138,9 +161,11 @@ def embed_clip_images(
                 continue
             image = load_pil_image(url, timeout=timeout)
             if image is None:
+                statuses[row_index] = "download_or_decode_failed"
                 continue
             images.append(image)
             target_rows.append(row_index)
+            statuses[row_index] = "loaded"
 
         if not images:
             continue
@@ -151,8 +176,10 @@ def embed_clip_images(
             feats = model.get_image_features(**inputs)
         batch_vectors = feats.detach().cpu().numpy().astype(np.float32)
         vectors[target_rows] = l2_normalize(batch_vectors)
+        for row_index in target_rows:
+            statuses[row_index] = "embedded"
 
-    return vectors
+    return vectors, statuses
 
 
 def embed_clip_texts(
@@ -250,13 +277,25 @@ def save_artifacts(
 ) -> None:
     """Persist embeddings plus lightweight metadata for later retrieval."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    clip_status_counts = {
+        str(status): int(count)
+        for status, count in df["clip_embedding_status"].value_counts().items()
+    }
 
     np.save(output_dir / "text_embeddings.npy", text_vectors)
     np.save(output_dir / "clip_embeddings.npy", clip_vectors)
     np.save(output_dir / "joint_embeddings.npy", joint_vectors)
 
     metadata_columns = [col for col in DEFAULT_METADATA_COLUMNS if col in df.columns]
-    metadata_columns.extend(["embed_text", "embed_image_url"])
+    metadata_columns.extend(
+        [
+            "embed_text",
+            "embed_image_url",
+            "has_image_url",
+            "clip_embedding_status",
+            "has_clip_embedding",
+        ]
+    )
     df.loc[:, metadata_columns].to_csv(output_dir / "metadata.csv", index=False)
 
     manifest = {
@@ -269,6 +308,7 @@ def save_artifacts(
         "text_embedding_dim": int(text_vectors.shape[1]),
         "clip_embedding_dim": int(clip_vectors.shape[1]),
         "joint_embedding_dim": int(joint_vectors.shape[1]),
+        "clip_embedding_status_counts": clip_status_counts,
     }
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2),
@@ -350,6 +390,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Build a text-only embedding space with no CLIP component",
     )
+    parser.add_argument(
+        "--clip-dim",
+        type=int,
+        default=None,
+        help="Projection dim for --skip-images when you do not want to load CLIP",
+    )
     return parser.parse_args()
 
 
@@ -371,17 +417,33 @@ def main() -> int:
 
     if args.disable_clip:
         clip_vectors = np.zeros((len(df), 0), dtype=np.float32)
+        df["clip_embedding_status"] = np.where(
+            df["has_image_url"],
+            "clip_disabled",
+            "missing_url",
+        )
     elif args.skip_images:
-        clip_dim = int(CLIPModel.from_pretrained(args.clip_model).config.projection_dim)
+        clip_dim = resolve_clip_projection_dim(
+            args.clip_model,
+            clip_dim=args.clip_dim,
+        )
         clip_vectors = np.zeros((len(df), clip_dim), dtype=np.float32)
+        df["clip_embedding_status"] = np.where(
+            df["has_image_url"],
+            "skipped_image_encoding",
+            "missing_url",
+        )
     else:
-        clip_vectors = embed_clip_images(
+        clip_vectors, clip_statuses = embed_clip_images(
             df["embed_image_url"].tolist(),
             model_name=args.clip_model,
             batch_size=args.batch_size,
             device=device,
             timeout=args.image_timeout,
         )
+        df["clip_embedding_status"] = clip_statuses
+
+    df["has_clip_embedding"] = df["clip_embedding_status"].eq("embedded")
 
     joint_vectors = build_joint_embeddings(
         clip_vectors,
