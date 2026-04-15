@@ -5,6 +5,7 @@ python-dotenv>=1.0,<2
 # notebooks / data
 jupyter>=1.0,<2
 ipykernel>=6.29,<7
+numpy>=1.26,<3
 pandas>=2.0,<3
 
 # hugging face

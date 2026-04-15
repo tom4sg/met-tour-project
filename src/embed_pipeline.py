@@ -1,0 +1,409 @@
+"""
+Offline embedding pipeline for Met Museum objects.
+
+This module turns a CSV of Met object metadata into reusable embedding artifacts:
+
+- sentence-transformer text embeddings built from metadata fields
+- CLIP image embeddings built from object images
+- a normalized joint vector formed by weighted concatenation
+
+The same module also exposes query-embedding helpers so search code can place a
+natural-language prompt into the same joint space later on.
+
+Example:
+    python -m src.embed_pipeline ^
+        --input-csv data/processed/met_on_view.csv ^
+        --output-dir embeddings ^
+        --limit 500
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Iterable, Sequence
+
+import numpy as np
+import pandas as pd
+import torch
+from sentence_transformers import SentenceTransformer
+from transformers import AutoProcessor, CLIPModel
+
+try:
+    from .embed_prep import build_embedding_text, image_url, load_pil_image
+except ImportError:
+    from embed_prep import build_embedding_text, image_url, load_pil_image
+
+DEFAULT_TEXT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_CLIP_MODEL = "openai/clip-vit-base-patch32"
+DEFAULT_METADATA_COLUMNS = [
+    "objectID",
+    "title",
+    "artistDisplayName",
+    "department",
+    "GalleryNumber",
+    "objectDate",
+    "culture",
+    "medium",
+    "primaryImageSmall",
+    "primaryImage",
+    "objectURL",
+]
+
+
+def l2_normalize(array: np.ndarray, *, axis: int = 1, eps: float = 1e-12) -> np.ndarray:
+    """Return an L2-normalized copy while keeping zero vectors stable."""
+    array = np.asarray(array, dtype=np.float32)
+    norms = np.linalg.norm(array, axis=axis, keepdims=True)
+    norms = np.maximum(norms, eps)
+    return array / norms
+
+
+def resolve_device(requested: str) -> str:
+    """Resolve a user device hint into a concrete torch device string."""
+    if requested != "auto":
+        return requested
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def batched(sequence: Sequence[object], batch_size: int) -> Iterable[tuple[int, Sequence[object]]]:
+    """Yield (start_index, batch_slice) pairs."""
+    for start in range(0, len(sequence), batch_size):
+        yield start, sequence[start : start + batch_size]
+
+
+def build_embedding_dataframe(df: pd.DataFrame, *, prefer_image_field: str) -> pd.DataFrame:
+    """Add the canonical embedding text and preferred image URL columns."""
+    out = df.copy()
+    out["embed_text"] = out.apply(build_embedding_text, axis=1)
+    out["embed_image_url"] = out.apply(
+        lambda row: image_url(row, prefer=prefer_image_field),
+        axis=1,
+    )
+    return out
+
+
+def embed_metadata_texts(
+    texts: Sequence[str],
+    *,
+    model_name: str,
+    batch_size: int,
+    device: str,
+) -> np.ndarray:
+    """Encode metadata strings into a dense semantic space."""
+    model = SentenceTransformer(model_name, device=device)
+    vectors = model.encode(
+        list(texts),
+        batch_size=batch_size,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=True,
+    )
+    return np.asarray(vectors, dtype=np.float32)
+
+
+def load_clip(model_name: str, device: str) -> tuple[CLIPModel, AutoProcessor]:
+    """Load CLIP once for both image and text encoding."""
+    model = CLIPModel.from_pretrained(model_name)
+    processor = AutoProcessor.from_pretrained(model_name)
+    model.eval()
+    model.to(device)
+    return model, processor
+
+
+def embed_clip_images(
+    image_urls: Sequence[str | None],
+    *,
+    model_name: str,
+    batch_size: int,
+    device: str,
+    timeout: float,
+) -> np.ndarray:
+    """Encode artwork images with CLIP, leaving missing images as zero vectors."""
+    model, processor = load_clip(model_name, device)
+    dim = int(model.config.projection_dim)
+    vectors = np.zeros((len(image_urls), dim), dtype=np.float32)
+
+    for start, batch_urls in batched(list(image_urls), batch_size):
+        images = []
+        target_rows: list[int] = []
+        for offset, url in enumerate(batch_urls):
+            row_index = start + offset
+            if not url:
+                continue
+            image = load_pil_image(url, timeout=timeout)
+            if image is None:
+                continue
+            images.append(image)
+            target_rows.append(row_index)
+
+        if not images:
+            continue
+
+        inputs = processor(images=images, return_tensors="pt")
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        with torch.inference_mode():
+            feats = model.get_image_features(**inputs)
+        batch_vectors = feats.detach().cpu().numpy().astype(np.float32)
+        vectors[target_rows] = l2_normalize(batch_vectors)
+
+    return vectors
+
+
+def embed_clip_texts(
+    texts: Sequence[str],
+    *,
+    model_name: str,
+    batch_size: int,
+    device: str,
+) -> np.ndarray:
+    """Encode free-text queries into the CLIP-aligned semantic space."""
+    model, processor = load_clip(model_name, device)
+    dim = int(model.config.projection_dim)
+    vectors = np.zeros((len(texts), dim), dtype=np.float32)
+
+    for start, batch_texts in batched(list(texts), batch_size):
+        inputs = processor(text=list(batch_texts), return_tensors="pt", padding=True, truncation=True)
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        with torch.inference_mode():
+            feats = model.get_text_features(**inputs)
+        batch_vectors = feats.detach().cpu().numpy().astype(np.float32)
+        vectors[start : start + len(batch_texts)] = l2_normalize(batch_vectors)
+
+    return vectors
+
+
+def build_joint_embeddings(
+    clip_vectors: np.ndarray,
+    text_vectors: np.ndarray,
+    *,
+    clip_weight: float = 1.0,
+    text_weight: float = 1.0,
+) -> np.ndarray:
+    """Combine CLIP and metadata vectors into a single normalized representation."""
+    if len(clip_vectors) != len(text_vectors):
+        raise ValueError("clip_vectors and text_vectors must have the same row count")
+    weighted_clip = l2_normalize(clip_vectors) * np.float32(clip_weight)
+    weighted_text = l2_normalize(text_vectors) * np.float32(text_weight)
+    joint = np.concatenate([weighted_clip, weighted_text], axis=1)
+    return l2_normalize(joint)
+
+
+def embed_queries(
+    queries: Sequence[str],
+    *,
+    text_model_name: str = DEFAULT_TEXT_MODEL,
+    clip_model_name: str | None = DEFAULT_CLIP_MODEL,
+    batch_size: int = 32,
+    device: str = "auto",
+    clip_weight: float = 1.0,
+    text_weight: float = 1.0,
+) -> np.ndarray:
+    """
+    Build query embeddings in the same joint space used for artworks.
+
+    The artwork side uses CLIP-image + metadata-text vectors. The query side uses
+    CLIP-text + metadata-text vectors so cosine similarity still compares aligned
+    CLIP dimensions alongside the richer metadata dimensions.
+    """
+    resolved_device = resolve_device(device)
+    if clip_model_name:
+        clip_vectors = embed_clip_texts(
+            queries,
+            model_name=clip_model_name,
+            batch_size=batch_size,
+            device=resolved_device,
+        )
+    else:
+        clip_vectors = np.zeros((len(queries), 0), dtype=np.float32)
+    text_vectors = embed_metadata_texts(
+        queries,
+        model_name=text_model_name,
+        batch_size=batch_size,
+        device=resolved_device,
+    )
+    return build_joint_embeddings(
+        clip_vectors,
+        text_vectors,
+        clip_weight=clip_weight,
+        text_weight=text_weight,
+    )
+
+
+def save_artifacts(
+    df: pd.DataFrame,
+    *,
+    output_dir: Path,
+    text_vectors: np.ndarray,
+    clip_vectors: np.ndarray,
+    joint_vectors: np.ndarray,
+    text_model_name: str,
+    clip_model_name: str,
+    clip_weight: float,
+    text_weight: float,
+    clip_enabled: bool,
+) -> None:
+    """Persist embeddings plus lightweight metadata for later retrieval."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    np.save(output_dir / "text_embeddings.npy", text_vectors)
+    np.save(output_dir / "clip_embeddings.npy", clip_vectors)
+    np.save(output_dir / "joint_embeddings.npy", joint_vectors)
+
+    metadata_columns = [col for col in DEFAULT_METADATA_COLUMNS if col in df.columns]
+    metadata_columns.extend(["embed_text", "embed_image_url"])
+    df.loc[:, metadata_columns].to_csv(output_dir / "metadata.csv", index=False)
+
+    manifest = {
+        "rows": int(len(df)),
+        "text_model": text_model_name,
+        "clip_model": clip_model_name,
+        "clip_enabled": clip_enabled,
+        "text_weight": text_weight,
+        "clip_weight": clip_weight,
+        "text_embedding_dim": int(text_vectors.shape[1]),
+        "clip_embedding_dim": int(clip_vectors.shape[1]),
+        "joint_embedding_dim": int(joint_vectors.shape[1]),
+    }
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build Met artwork embedding artifacts")
+    parser.add_argument(
+        "--input-csv",
+        type=Path,
+        default=Path("data/processed/met_on_view.csv"),
+        help="CSV exported from the Met API",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("embeddings"),
+        help="Directory for .npy and metadata outputs",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only embed the first N rows for smoke testing",
+    )
+    parser.add_argument(
+        "--text-model",
+        default=DEFAULT_TEXT_MODEL,
+        help="sentence-transformers model for metadata text",
+    )
+    parser.add_argument(
+        "--clip-model",
+        default=DEFAULT_CLIP_MODEL,
+        help="CLIP model for image embeddings and future query text embeddings",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Batch size for both text and CLIP processing",
+    )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="Torch device: auto, cpu, cuda, or mps",
+    )
+    parser.add_argument(
+        "--clip-weight",
+        type=float,
+        default=1.0,
+        help="Weight applied to normalized CLIP vectors before concatenation",
+    )
+    parser.add_argument(
+        "--text-weight",
+        type=float,
+        default=1.0,
+        help="Weight applied to normalized metadata vectors before concatenation",
+    )
+    parser.add_argument(
+        "--prefer-image-field",
+        default="primaryImageSmall",
+        help="Preferred URL column for CLIP image downloads",
+    )
+    parser.add_argument(
+        "--image-timeout",
+        type=float,
+        default=30.0,
+        help="Per-image download timeout in seconds",
+    )
+    parser.add_argument(
+        "--skip-images",
+        action="store_true",
+        help="Skip CLIP image encoding and fill that part with zeros",
+    )
+    parser.add_argument(
+        "--disable-clip",
+        action="store_true",
+        help="Build a text-only embedding space with no CLIP component",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    device = resolve_device(args.device)
+
+    df = pd.read_csv(args.input_csv)
+    if args.limit is not None:
+        df = df.head(args.limit).copy()
+    df = build_embedding_dataframe(df, prefer_image_field=args.prefer_image_field)
+
+    text_vectors = embed_metadata_texts(
+        df["embed_text"].fillna("").tolist(),
+        model_name=args.text_model,
+        batch_size=args.batch_size,
+        device=device,
+    )
+
+    if args.disable_clip:
+        clip_vectors = np.zeros((len(df), 0), dtype=np.float32)
+    elif args.skip_images:
+        clip_dim = int(CLIPModel.from_pretrained(args.clip_model).config.projection_dim)
+        clip_vectors = np.zeros((len(df), clip_dim), dtype=np.float32)
+    else:
+        clip_vectors = embed_clip_images(
+            df["embed_image_url"].tolist(),
+            model_name=args.clip_model,
+            batch_size=args.batch_size,
+            device=device,
+            timeout=args.image_timeout,
+        )
+
+    joint_vectors = build_joint_embeddings(
+        clip_vectors,
+        text_vectors,
+        clip_weight=args.clip_weight,
+        text_weight=args.text_weight,
+    )
+
+    save_artifacts(
+        df,
+        output_dir=args.output_dir,
+        text_vectors=text_vectors,
+        clip_vectors=clip_vectors,
+        joint_vectors=joint_vectors,
+        text_model_name=args.text_model,
+        clip_model_name=args.clip_model,
+        clip_weight=args.clip_weight,
+        text_weight=args.text_weight,
+        clip_enabled=not args.disable_clip,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
