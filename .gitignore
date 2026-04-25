@@ -12,3 +12,8 @@ __pycache__/
 data/raw/
 data/raw/MetObjects.csv
 data/raw/MetObjects.txt
+data/embeddings/
+*.npy
+
+.next
+node_modules/
