@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --met-red: #e31837;
+  --met-cream: #f5f0e8;
+  --met-charcoal: #1a1a1a;
+  --met-gold: #c9a84c;
+}
+
+@layer base {
+  body {
+    background-color: var(--met-cream);
+    color: var(--met-charcoal);
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: Georgia, "Times New Roman", serif;
+  }
+}
