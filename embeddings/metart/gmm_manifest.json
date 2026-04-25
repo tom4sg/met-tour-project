@@ -1,0 +1,17 @@
+[
+  {
+    "space": "joint",
+    "n_rows": 44973,
+    "embedding_dim": 896,
+    "n_components": 64,
+    "covariance_type": "diag",
+    "scaled": true,
+    "converged": true,
+    "n_iter": 31,
+    "fit_seconds": 17.28,
+    "artifacts": {
+      "npz": "gmm_joint.npz",
+      "indices_json": "gmm_joint_indices.json"
+    }
+  }
+]

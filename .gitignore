@@ -12,3 +12,7 @@ __pycache__/
 data/raw/
 data/raw/MetObjects.csv
 data/raw/MetObjects.txt
+
+# Large embedding and GMM artifacts — regenerate locally via embed_pipeline + cluster_gmm
+embeddings/**/*.npy
+embeddings/**/*.npz
