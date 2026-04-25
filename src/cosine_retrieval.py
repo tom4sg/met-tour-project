@@ -1,6 +1,7 @@
 """
 This module implements every function that requires the cosine similiarty score to be caltulated 
 
+Note: make sure the GMM means are re-normalized after GMM training 
 1. Input: query vector, cluter means, fulla artwork embedding matrix and the cluster assignment telling which artwork belongs to which cluster
 2. It is assumed that all embeddings are L2-normalized in the embedding file. MOST importantly it assuems that the centroids are already normalized. 
 3. Retrieval logic assumes embeddings, cluster means, and query vectors all live
