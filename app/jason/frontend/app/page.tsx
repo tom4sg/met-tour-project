@@ -5,6 +5,7 @@ import HeroSection from "../components/HeroSection";
 import LoadingState from "../components/LoadingState";
 import ResultsGrid from "../components/ResultsGrid";
 import SearchForm from "../components/SearchForm";
+import TourPanel from "../components/TourPanel";
 import type { SearchResponse } from "../types/search";
 
 export default function HomePage() {
@@ -13,6 +14,7 @@ export default function HomePage() {
   );
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
   const showHero = searchResponse === null && !isLoading;
 
@@ -31,6 +33,7 @@ export default function HomePage() {
             }}
             onLoading={setIsLoading}
             onError={setError}
+            onQuery={setSearchQuery}
           />
         </div>
       </div>
@@ -65,6 +68,7 @@ export default function HomePage() {
             queryMode={searchResponse.query_mode}
             textWeight={searchResponse.text_weight}
           />
+          <TourPanel artworks={searchResponse.results} query={searchQuery} />
         </div>
       )}
     </div>

@@ -11,6 +11,7 @@ from config import settings
 from encoder import QueryEncoder
 from index import EmbeddingIndex
 from models import ArtworkResult, HealthResponse, SearchMode, SearchResponse
+from tour import router as tour_router
 
 
 @asynccontextmanager
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
     encoder = QueryEncoder()
     app.state.index = index
     app.state.encoder = encoder
+    app.state.gallery_cache = {}
     yield
 
 
@@ -32,6 +34,8 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
 )
+
+app.include_router(tour_router)
 
 
 @app.get("/health", response_model=HealthResponse)

@@ -12,6 +12,7 @@ export interface ArtworkResult {
   object_url: string;
   score: number;
   is_highlight: boolean;
+  gallery_number: string | null;
 }
 
 export interface SearchResponse {

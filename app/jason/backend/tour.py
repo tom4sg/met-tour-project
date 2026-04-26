@@ -1,0 +1,860 @@
+import asyncio
+
+import httpx
+import numpy as np
+
+# ROOM_COORDS
+# Source: Met Fifth Avenue floor maps (Floor 1 & Mezzanines, Floor 2 & Floor 3)
+# Each entry: "GalleryNumber" -> (x, y, floor)
+ROOM_COORDS: dict[str, tuple[float, float, int]] = {
+    # FLOOR 1
+    # -- Egyptian Art --
+    "100": (5.35, 1.20, 1),
+    "101": (5.45, 0.85, 1),
+    "102": (5.65, 1.20, 1),
+    "103": (5.95, 0.85, 1),
+    "104": (6.55, 0.85, 1),
+    "105": (6.75, 0.25, 1),
+    "106": (6.55, 0.20, 1),
+    "107": (6.75, 0.85, 1),
+    "108": (6.95, 0.85, 1),
+    "109": (7.15, 1.20, 1),
+    "110": (6.95, 0.25, 1),
+    "111": (7.35, 0.25, 1),
+    "112": (7.15, 0.85, 1),
+    "113": (7.35, 0.85, 1),
+    "114": (7.65, 0.85, 1),
+    "115": (7.95, 0.25, 1),
+    "116": (8.15, 0.85, 1),
+    "117": (7.85, 0.85, 1),
+    "118": (8.15, 1.40, 1),
+    "119": (8.15, 1.70, 1),
+    "120": (7.95, 1.95, 1),
+    "121": (7.75, 1.70, 1),
+    "122": (7.75, 1.40, 1),
+    "123": (7.35, 1.90, 1),
+    "124": (7.35, 1.70, 1),
+    "125": (7.15, 1.70, 1),
+    "126": (7.15, 1.40, 1),
+    "127": (6.95, 1.70, 1),
+    "128": (6.75, 1.90, 1),
+    "129": (6.75, 3.10, 1),
+    "130": (7.00, 3.25, 1),
+    "131": (7.65, 4.50, 1),
+    "132": (6.75, 1.50, 1),
+    "133": (6.55, 1.90, 1),
+    "134": (6.25, 1.90, 1),
+    "135": (5.95, 1.90, 1),
+    "136": (5.95, 1.50, 1),
+    "137": (5.65, 1.90, 1),
+    "138": (5.45, 1.90, 1),
+    # -- Greek and Roman Art --
+    "150": (4.20, 1.40, 1),
+    "151": (4.20, 1.90, 1),
+    "152": (4.20, 0.85, 1),
+    "153": (3.40, 1.40, 1),
+    "154": (3.80, 0.85, 1),
+    "155": (3.80, 1.90, 1),
+    "156": (3.40, 0.85, 1),
+    "157": (3.40, 1.90, 1),
+    "158": (3.00, 0.85, 1),
+    "159": (3.00, 1.90, 1),
+    "160": (2.70, 0.85, 1),
+    "161": (2.70, 1.90, 1),
+    "162": (2.00, 1.90, 1),
+    "163": (2.70, 0.20, 1),
+    "164": (2.30, 0.25, 1),
+    "165": (2.00, 0.25, 1),
+    "166": (1.60, 0.25, 1),
+    "167": (1.30, 0.25, 1),
+    "168": (1.00, 0.25, 1),
+    "169": (0.90, 1.40, 1),
+    "170": (0.90, 1.90, 1),
+    "171": (0.90, 0.60, 1),
+    "172": (2.30, 0.60, 1),
+    # -- Arms and Armor --
+    "370": (5.70, 4.80, 1),
+    "371": (6.30, 4.65, 1),
+    "372": (7.00, 4.65, 1),
+    "373": (5.75, 5.25, 1),
+    "374": (6.10, 5.25, 1),
+    "375": (6.30, 5.25, 1),
+    "376": (7.00, 5.25, 1),
+    "377": (5.75, 4.00, 1),
+    "378": (6.10, 4.00, 1),
+    "379": (6.30, 4.00, 1),
+    "380": (6.55, 3.60, 1),
+    # -- Medieval Art --
+    "300": (5.15, 3.25, 1),
+    "301": (5.25, 3.25, 1),
+    "302": (5.20, 3.40, 1),
+    "303": (5.20, 3.80, 1),
+    "304": (5.20, 4.00, 1),
+    "305": (5.20, 5.75, 1),
+    "306": (5.35, 5.75, 1),
+    "307": (5.60, 5.75, 1),
+    # -- European Sculpture and Decorative Arts --
+    "500": (5.30, 4.30, 1),
+    "501": (5.30, 4.00, 1),
+    "502": (5.35, 4.10, 1),
+    "503": (5.55, 4.80, 1),
+    "504": (5.40, 4.10, 1),
+    "505": (5.60, 4.20, 1),
+    "506": (5.65, 5.15, 1),
+    "507": (5.55, 5.15, 1),
+    "508": (5.60, 5.40, 1),
+    "509": (5.60, 6.00, 1),
+    "510": (5.35, 6.00, 1),
+    "511": (5.30, 6.00, 1),
+    "512": (5.25, 6.00, 1),
+    "513": (5.35, 6.40, 1),
+    "514": (5.60, 6.40, 1),
+    "515": (5.60, 7.00, 1),
+    "516": (5.35, 7.00, 1),
+    "518": (5.25, 6.40, 1),
+    "517": (5.30, 7.00, 1),
+    "519": (5.25, 7.00, 1),
+    "520": (5.15, 6.40, 1),
+    "521": (5.20, 7.00, 1),
+    "522": (4.90, 6.40, 1),
+    "523": (4.90, 7.00, 1),
+    "524": (4.45, 6.40, 1),
+    "525": (4.50, 7.00, 1),
+    "526": (4.00, 7.00, 1),
+    "527": (3.90, 6.40, 1),
+    "528": (4.00, 6.00, 1),
+    "529": (3.90, 5.75, 1),
+    "530": (4.25, 5.75, 1),
+    "531": (3.90, 5.50, 1),
+    "532": (3.90, 5.15, 1),
+    "533": (4.00, 4.50, 1),
+    "534": (5.10, 3.25, 1),
+    "536": (5.10, 3.80, 1),
+    "537": (4.90, 4.10, 1),
+    "538": (4.40, 4.10, 1),
+    "539": (4.40, 4.80, 1),
+    "540": (4.85, 4.80, 1),
+    "541": (4.95, 4.80, 1),
+    "542": (4.90, 5.15, 1),
+    "543": (4.90, 5.40, 1),
+    "544": (4.75, 5.75, 1),
+    "545": (5.00, 6.00, 1),
+    "546": (4.80, 5.90, 1),
+    "547": (4.80, 6.10, 1),
+    "548": (3.60, 6.20, 1),
+    "549": (3.40, 6.20, 1),
+    "550": (3.20, 4.10, 1),
+    "551": (3.30, 5.25, 1),
+    "552": (3.30, 5.90, 1),
+    "553": (3.30, 6.20, 1),
+    "554": (3.10, 6.20, 1),
+    "555": (3.10, 5.90, 1),
+    "556": (3.00, 5.25, 1),
+    # -- Arts of Africa, Oceania, and the Americas --
+    "340": (2.65, 3.05, 1),
+    "341": (2.65, 3.95, 1),
+    "342": (2.25, 4.05, 1),
+    "343": (2.20, 3.95, 1),
+    "344": (1.80, 3.25, 1),
+    "345": (1.80, 3.45, 1),
+    "350": (2.65, 5.25, 1),
+    "351": (2.25, 5.00, 1),
+    "352": (2.00, 4.10, 1),
+    "353": (1.60, 3.80, 1),
+    "354": (1.10, 3.80, 1),
+    "359": (2.25, 5.40, 1),
+    "360": (1.10, 5.25, 1),
+    "361": (1.60, 4.40, 1),
+    "362": (1.60, 5.40, 1),
+    "363": (2.00, 5.40, 1),
+    "399": (2.10, 5.75, 1),
+    # -- American Art (The American Wing) --
+    "700": (5.95, 6.40, 1),
+    "701": (5.75, 6.40, 1),
+    "702": (6.85, 5.75, 1),
+    "707": (5.95, 7.50, 1),
+    "723": (6.65, 6.40, 1),
+    "724": (6.70, 6.75, 1),
+    "725": (6.85, 6.50, 1),
+    "726": (6.85, 6.40, 1),
+    "727": (6.85, 6.20, 1),
+    "728": (6.85, 6.00, 1),
+    "729": (6.70, 6.00, 1),
+    "730": (7.00, 6.00, 1),
+    "731": (7.15, 6.40, 1),
+    "732": (7.55, 6.40, 1),
+    "733": (7.35, 6.20, 1),
+    "734": (7.60, 6.10, 1),
+    "735": (7.45, 7.00, 1),
+    "736": (7.35, 7.50, 1),
+    "737": (7.15, 7.50, 1),
+    "738": (7.60, 8.00, 1),
+    "739": (7.20, 8.00, 1),
+    "740": (7.45, 8.40, 1),
+    "741": (7.15, 8.40, 1),
+    "742": (7.15, 8.00, 1),
+    "743": (6.85, 8.35, 1),
+    "744": (6.65, 7.20, 1),
+    "745": (6.25, 7.60, 1),
+    "746": (6.85, 7.55, 1),
+    "773": (6.85, 6.00, 1),
+    "774": (7.80, 7.00, 1),
+    # -- Modern and Contemporary Art --
+    "900": (1.30, 6.00, 1),
+    "901": (1.30, 6.50, 1),
+    "902": (1.30, 7.00, 1),
+    "903": (1.25, 7.60, 1),
+    "904": (1.30, 8.30, 1),
+    "905": (1.75, 8.30, 1),
+    "906": (2.20, 8.30, 1),
+    "907": (2.55, 8.30, 1),
+    "908": (2.55, 6.00, 1),
+    "909": (2.00, 6.00, 1),
+    "910": (2.55, 6.50, 1),
+    "911": (2.55, 7.00, 1),
+    "912": (2.65, 7.60, 1),
+    "913": (2.00, 7.60, 1),
+    "914": (2.65, 7.70, 1),
+    "915": (2.20, 8.40, 1),
+    "916": (1.25, 7.70, 1),
+    "926": (3.10, 5.90, 5),
+    # -- Robert Lehman Collection --
+    "950": (5.30, 8.20, 1),
+    "951": (5.28, 8.40, 1),
+    "952": (5.26, 8.60, 1),
+    "953": (5.24, 8.80, 1),
+    "954": (5.22, 9.00, 1),
+    "955": (5.20, 9.20, 1),
+    "956": (5.15, 9.00, 1),
+    "957": (5.10, 8.80, 1),
+    "958": (5.00, 8.60, 1),
+    "959": (4.92, 8.40, 1),
+    "960": (4.88, 8.20, 1),
+    "961": (5.00, 7.60, 1),
+    "962": (5.24, 7.60, 1),
+    "963": (5.20, 8.20, 1),
+    # Non-numeric gallery values
+    "Petrie Ct. Cafe": (3.25, 7.00, 1),
+    "in Great Hall": (5.20, 0.50, 1),
+    "on Fifth Avenue": (5.20, 0.00, 1),
+    # FLOOR 2  (Floor 3 rooms kept at floor=2)
+    # -- Ancient Near Eastern Art --
+    "400": (4.20, 2.00, 2),
+    "401": (4.20, 1.40, 2),
+    "402": (4.20, 1.00, 2),
+    "403": (3.80, 1.20, 2),
+    "404": (3.40, 1.20, 2),
+    "405": (3.00, 1.20, 2),
+    "406": (3.80, 1.90, 2),
+    # -- Greek and Roman Art --
+    "173": (3.60, 2.00, 2),
+    "174": (3.20, 2.00, 2),
+    "175": (2.80, 2.00, 2),
+    "176": (2.80, 1.50, 2),
+    # -- Islamic / Art of Arab Lands --
+    "450": (2.55, 1.00, 2),
+    "451": (2.55, 1.60, 2),
+    "452": (2.55, 2.00, 2),
+    "453": (2.20, 2.00, 2),
+    "454": (1.40, 2.00, 2),
+    "455": (1.50, 1.00, 2),
+    "456": (2.00, 1.00, 2),
+    "457": (2.25, 1.00, 2),
+    "458": (1.10, 2.00, 2),
+    "459": (1.10, 1.60, 2),
+    "460": (1.10, 1.00, 2),
+    "461": (1.10, 0.25, 2),
+    "462": (1.50, 0.25, 2),
+    "463": (2.25, 0.25, 2),
+    "464": (2.80, 0.20, 2),
+    # -- European Sculpture and Decorative Arts --
+    "535": (4.80, 3.00, 2),
+    # -- European Paintings 1250-1800 --
+    "600": (5.20, 4.00, 2),
+    "601": (5.20, 4.40, 2),
+    "602": (5.25, 5.50, 2),
+    "603": (5.25, 6.25, 2),
+    "604": (5.30, 6.25, 2),
+    "605": (5.35, 6.25, 2),
+    "606": (5.25, 6.60, 2),
+    "607": (5.20, 7.00, 2),
+    "608": (5.20, 7.20, 2),
+    "609": (5.30, 7.10, 2),
+    "610": (5.40, 7.20, 2),
+    "611": (5.40, 7.00, 2),
+    "612": (5.60, 7.20, 2),
+    "613": (5.60, 7.00, 2),
+    "614": (5.60, 6.60, 2),
+    "615": (5.60, 6.25, 2),
+    "616": (5.45, 6.25, 2),
+    "617": (5.60, 5.50, 2),
+    "618": (5.60, 4.40, 2),
+    "619": (5.60, 4.00, 2),
+    "620": (5.40, 4.00, 2),
+    "621": (5.40, 4.40, 2),
+    "622": (5.30, 4.00, 2),
+    "623": (5.30, 4.40, 2),
+    "624": (5.30, 5.50, 2),
+    "625": (5.00, 5.50, 2),
+    "626": (5.00, 6.25, 2),
+    "627": (5.00, 6.60, 2),
+    "628": (4.80, 7.10, 2),
+    "629": (4.30, 7.00, 2),
+    "630": (4.40, 7.10, 2),
+    "631": (4.00, 7.10, 2),
+    "632": (3.90, 7.10, 2),
+    "633": (3.90, 7.00, 2),
+    "634": (4.00, 6.60, 2),
+    "635": (4.10, 6.25, 2),
+    "636": (3.90, 6.25, 2),
+    "637": (4.00, 5.50, 2),
+    "638": (3.90, 4.00, 2),
+    "639": (4.10, 4.40, 2),
+    "640": (4.30, 4.40, 2),
+    "641": (4.50, 4.40, 2),
+    "642": (4.10, 4.00, 2),
+    "643": (4.30, 4.00, 2),
+    "644": (4.50, 4.00, 2),
+    # -- 19th & Early 20th Century European Paintings --
+    "800": (2.75, 3.50, 2),
+    "801": (2.55, 3.10, 2),
+    "802": (2.00, 3.10, 2),
+    "803": (1.50, 3.10, 2),
+    "804": (1.12, 3.00, 2),
+    "805": (1.05, 3.25, 2),
+    "806": (1.15, 3.25, 2),
+    "807": (1.15, 3.50, 2),
+    "808": (1.05, 3.50, 2),
+    "809": (2.60, 3.75, 2),
+    "810": (2.10, 3.75, 2),
+    "811": (1.50, 3.75, 2),
+    "812": (1.10, 3.75, 2),
+    "813": (1.50, 3.50, 2),
+    "814": (1.90, 3.50, 2),
+    "815": (2.10, 3.50, 2),
+    "816": (2.40, 3.50, 2),
+    "817": (2.60, 3.50, 2),
+    "818": (2.55, 4.10, 2),
+    "819": (2.55, 4.75, 2),
+    "820": (2.55, 5.50, 2),
+    "821": (2.10, 4.10, 2),
+    "822": (2.10, 4.75, 2),
+    "823": (2.10, 5.50, 2),
+    "824": (1.60, 4.10, 2),
+    "825": (1.60, 4.75, 2),
+    "826": (1.60, 5.50, 2),
+    "827": (1.10, 4.10, 2),
+    "828": (1.05, 4.75, 2),
+    "829": (1.15, 4.75, 2),
+    "830": (1.10, 5.50, 2),
+    # -- Drawings and Prints --
+    "690": (4.55, 3.75, 2),
+    "850": (3.90, 3.75, 2),
+    # -- Photographs --
+    "691": (3.40, 3.50, 2),
+    "692": (3.20, 3.50, 2),
+    "693": (3.00, 3.50, 2),
+    "851": (3.20, 4.00, 2),
+    "852": (3.90, 3.10, 2),
+    # -- Musical Instruments --
+    "680": (5.90, 4.75, 2),
+    "681": (6.25, 4.00, 2),
+    "682": (6.55, 4.00, 2),
+    "683": (6.55, 4.75, 2),
+    "684": (6.25, 5.50, 2),
+    # -- Asian Art (Floor 2 and Floor 3) --
+    "200": (5.15, 3.50, 2),
+    "201": (5.25, 3.50, 2),
+    "202": (5.20, 2.00, 2),
+    "203": (4.40, 0.65, 2),
+    "204": (5.20, 1.00, 2),
+    "205": (5.35, 1.40, 2),
+    "206": (5.40, 1.40, 2),
+    "207": (6.25, 2.00, 2),
+    "208": (6.00, 1.50, 2),
+    "209": (6.80, 1.50, 2),
+    "210": (7.30, 2.00, 2),
+    "211": (7.90, 1.90, 2),
+    "212": (7.90, 2.10, 2),
+    "213": (7.90, 1.25, 2),
+    "214": (7.40, 1.00, 2),
+    "215": (7.30, 1.00, 2),
+    "216": (7.15, 1.00, 2),
+    "217": (7.30, 1.50, 2),
+    "218": (7.50, 1.50, 2),
+    "219": (8.00, 2.10, 2),
+    "220": (8.00, 1.90, 2),
+    "221": (8.00, 1.50, 2),
+    "222": (8.00, 1.30, 2),
+    "223": (6.80, 3.10, 2),
+    "224": (6.80, 3.30, 2),
+    "225": (6.80, 3.90, 2),
+    "226": (6.80, 4.75, 2),
+    "227": (7.00, 5.50, 2),
+    "228": (7.00, 5.20, 2),
+    "229": (7.00, 4.50, 2),
+    "230": (7.10, 3.90, 2),
+    "231": (7.10, 3.30, 2),
+    "232": (7.10, 3.10, 2),
+    "233": (5.80, 1.50, 2),
+    "234": (5.70, 1.00, 2),
+    "235": (5.90, 1.00, 2),
+    "236": (6.00, 1.00, 2),
+    "237": (6.25, 1.00, 2),
+    "238": (6.30, 1.00, 2),
+    "239": (6.60, 1.00, 2),
+    "240": (6.55, 0.30, 2),
+    "241": (6.80, 0.30, 2),
+    "242": (6.60, 0.25, 2),
+    "243": (6.80, 0.25, 2),
+    "244": (7.00, 0.30, 2),
+    "245": (7.20, 0.30, 2),
+    "246": (7.30, 0.30, 2),
+    "247": (7.20, 0.25, 2),
+    "248": (7.40, 0.30, 2),
+    "249": (7.50, 0.30, 2),
+    "250": (7.90, 0.30, 2),
+    "251": (7.00, 0.25, 2),
+    "252": (7.20, 0.30, 2),
+    "253": (7.10, 0.25, 2),
+    # -- American Art (Floor 2 and Floor 3) --
+    "703": (6.65, 6.25, 2),
+    "704": (6.15, 6.25, 2),
+    "705": (5.90, 6.60, 2),
+    "706": (6.15, 7.00, 2),
+    "708": (6.60, 6.45, 2),
+    "709": (6.70, 6.45, 2),
+    "710": (6.70, 6.55, 2),
+    "711": (6.80, 6.65, 2),
+    "712": (6.62, 6.80, 2),
+    "713": (6.60, 6.60, 2),
+    "714": (6.57, 6.80, 2),
+    "715": (6.55, 6.60, 2),
+    "716": (6.55, 6.55, 2),
+    "717": (6.70, 6.60, 2),
+    "718": (6.70, 6.80, 2),
+    "719": (6.80, 6.70, 2),
+    "720": (6.80, 6.50, 2),
+    "721": (6.70, 6.40, 2),
+    "722": (6.65, 6.45, 2),
+    "747": (6.80, 6.25, 2),
+    "748": (7.20, 6.25, 2),
+    "749": (7.30, 6.25, 2),
+    "750": (7.40, 6.25, 2),
+    "751": (7.40, 6.40, 2),
+    "752": (7.30, 6.40, 2),
+    "753": (7.20, 6.40, 2),
+    "754": (7.15, 6.60, 2),
+    "755": (7.20, 6.80, 2),
+    "756": (7.30, 6.80, 2),
+    "757": (7.40, 6.80, 2),
+    "758": (7.15, 7.00, 2),
+    "759": (7.35, 7.00, 2),
+    "760": (7.15, 7.60, 2),
+    "761": (7.35, 7.40, 2),
+    "762": (7.35, 7.80, 2),
+    "763": (7.35, 8.10, 2),
+    "764": (7.15, 8.10, 2),
+    "765": (6.80, 8.10, 2),
+    "766": (6.60, 8.10, 2),
+    "767": (6.80, 7.80, 2),
+    "768": (6.60, 7.80, 2),
+    "769": (6.60, 7.40, 2),
+    "770": (6.80, 7.40, 2),
+    "771": (6.80, 7.00, 2),
+    "772": (6.60, 7.00, 2),
+    # -- Modern and Contemporary Art --
+    "917": (1.30, 6.25, 2),
+    "918": (1.30, 6.75, 2),
+    "919": (1.30, 7.00, 2),
+    "920": (1.80, 7.80, 2),
+    "921": (2.00, 7.80, 2),
+    "922": (2.20, 7.80, 2),
+    "923": (2.40, 7.80, 2),
+    "924": (2.60, 7.80, 2),
+    "925": (2.80, 7.80, 2),
+    # Exhibition Gallery 899
+    "899": (3.20, 6.25, 2),
+    # Exhibition Gallery 999
+    "999": (2.40, 6.80, 2),
+}
+
+# DEPARTMENT_COORDS -- centroid fallback when GalleryNumber is absent
+DEPARTMENT_COORDS: dict[str, tuple[float, float, int]] = {
+    # Floor 1
+    "Egyptian Art": (7.0, 1.75, 1),
+    "Greek and Roman Art": (2.0, 1.75, 1),
+    "Arms and Armor": (5.95, 5.0, 1),
+    "Medieval Art": (5.2, 5.25, 1),
+    "European Sculpture and Decorative Arts": (3.6, 5.0, 1),
+    "Arts of Africa, Oceania, and the Americas": (2.0, 4.0, 1),
+    "The Michael C. Rockefeller Wing": (2.0, 4.0, 1),
+    "The American Wing": (6.55, 7.0, 1),
+    "Modern and Contemporary Art": (2.2, 7.0, 1),
+    "Robert Lehman Collection": (5.2, 8.5, 1),
+    # Floor 2
+    "Ancient Near Eastern Art": (3.3, 1.0, 2),
+    "Art of the Arab Lands, Turkey, Iran, Central Asia, and Later South Asia": (
+        1.9,
+        1.6,
+        2,
+    ),
+    "European Paintings": (2.0, 4.0, 2),
+    "19th- and Early 20th-Century European Paintings and Sculpture": (2.0, 4.0, 2),
+    "Drawings and Prints": (4.6, 3.75, 2),
+    "Photographs": (3.2, 3.2, 2),
+    "Musical Instruments": (6.2, 4.6, 2),
+    "Asian Art": (6.8, 1.5, 2),
+    "American Art": (6.8, 7.0, 2),
+    # Lower level
+    "Costume Institute": (5.0, 0.3, 1),
+}
+
+# Floor penalty: z = floor_number * FLOOR_PENALTY so Euclidean distance
+# naturally penalises floor changes.
+FLOOR_PENALTY: float = 8.0
+
+# Starting point for every tour: the Great Hall on Floor 1
+GREAT_HALL: tuple[float, float, float] = (5.2, 0.5, 1.0 * FLOOR_PENALTY)
+
+
+# ---------------------------------------------------------------------------
+# Coordinate helpers
+# ---------------------------------------------------------------------------
+
+
+def get_coords(artwork: dict) -> tuple[float, float, float]:
+    """Return the 3-D routing coordinate for a single artwork dict.
+
+    Lookup order:
+      1. GalleryNumber  -> exact room position from ROOM_COORDS
+      2. department     -> department centroid from DEPARTMENT_COORDS
+      3. fallback       -> sentinel (99, 99, 99) so unknown artworks sort last
+    """
+    gallery = str(artwork.get("GalleryNumber", "")).strip()
+    if gallery and gallery in ROOM_COORDS:
+        x, y, floor = ROOM_COORDS[gallery]
+        return (x, y, floor * FLOOR_PENALTY)
+
+    dept = (artwork.get("department") or artwork.get("Department") or "").strip()
+    if dept and dept in DEPARTMENT_COORDS:
+        x, y, floor = DEPARTMENT_COORDS[dept]
+        return (x, y, floor * FLOOR_PENALTY)
+
+    return (99.0, 99.0, 99.0)
+
+
+def coords_array(artworks: list[dict]) -> "np.ndarray":
+    """Convert a list of artwork dicts to an (N, 3) float array of coordinates."""
+    return np.array([get_coords(a) for a in artworks], dtype=float)
+
+
+def total_distance(route: list[dict]) -> float:
+    """Compute the total Euclidean path length for a given ordered route."""
+    coords = coords_array(route)
+    total = 0.0
+    for i in range(len(coords) - 1):
+        total += float(np.linalg.norm(coords[i + 1] - coords[i]))
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Routing algorithms
+# ---------------------------------------------------------------------------
+
+
+def two_opt(route: list[dict]) -> list[dict]:
+    """
+    Improve a route using the 2-opt local search heuristic.
+
+    Algorithm:
+    Repeatedly try reversing every sub-segment [i..j].
+    If the reversal shortens total_distance, keep it and restart.
+    Continue until no improving swap is found.
+    """
+    best = route[:]
+    improved = True
+
+    while improved:
+        improved = False
+        for i in range(1, len(best) - 1):
+            for j in range(i + 1, len(best)):
+                # Reverse the segment between index i and j (inclusive)
+                candidate = best[:i] + best[i : j + 1][::-1] + best[j + 1 :]
+                if total_distance(candidate) < total_distance(best):
+                    best = candidate
+                    improved = True
+    return best
+
+
+def nearest_neighbor_route(artworks: list[dict]) -> list[dict]:
+    """
+    Build a tour by applying greedy nearest-neighbor + 2-opt floor by floor.
+
+    Strategy:
+      1. Partition artworks into floor 1, floor 2, and other/unknown.
+      2. For each floor group, run a greedy nearest-neighbor starting from
+         the current position (initially the Great Hall on Floor 1).
+      3. Refine each floor's greedy route with two_opt to remove crossings.
+      4. Concatenate floor groups: Floor 1 → Floor 2 → Other.
+         The last artwork on each floor becomes the start of the next floor,
+         which encourages a natural staircase/elevator transition point.
+
+    Args:
+        artworks: list of artwork dicts (any order).
+
+    Returns:
+        Ordered list of artwork dicts in suggested walking order.
+    """
+    if not artworks:
+        return []
+
+    # Partition into floors by decoding z = floor * FLOOR_PENALTY
+    floor1 = [a for a in artworks if int(get_coords(a)[2] // FLOOR_PENALTY) == 1]
+    floor2 = [a for a in artworks if int(get_coords(a)[2] // FLOOR_PENALTY) == 2]
+    other = [
+        a for a in artworks if int(get_coords(a)[2] // FLOOR_PENALTY) not in (1, 2)
+    ]
+
+    result = []
+
+    # Start the walk at the Great Hall entrance on Floor 1
+    current = np.array(GREAT_HALL, dtype=float)
+
+    for group in [floor1, floor2, other]:
+        if not group:
+            continue
+
+        # Step 1: greedy nearest-neighbor to get initial route
+        coords = coords_array(group)
+        n = len(group)
+        visited = np.zeros(n, dtype=bool)
+        greedy = []
+        cur = current.copy()
+        for _ in range(n):
+            dists = np.linalg.norm(coords - cur, axis=1)
+            dists[visited] = np.inf
+            idx = int(np.argmin(dists))
+            greedy.append(group[idx])
+            visited[idx] = True
+            cur = coords[idx]
+
+        # Step 2: 2-opt to clean up crossings within the floor
+        optimized = two_opt(greedy)
+
+        result.extend(optimized)
+        if optimized:
+            current = coords_array(optimized)[-1]  # end of this floor = start of next
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Tour grouping
+# ---------------------------------------------------------------------------
+
+try:
+    from app.backend.models import GalleryStop, TourArtwork
+except ModuleNotFoundError:
+    from models import GalleryStop, TourArtwork  # type: ignore[no-redef]
+
+
+def _stop_label(artwork: dict) -> str:
+    """Return the stop label for an artwork using priority: gallery → dept → unknown."""
+    gallery = str(artwork.get("GalleryNumber", "")).strip()
+    if gallery and gallery in ROOM_COORDS:
+        return f"Gallery {gallery}"
+    dept = (artwork.get("department") or artwork.get("Department") or "").strip()
+    if dept:
+        return dept
+    return "Unknown Location"
+
+
+def group_by_stop(artworks: list[dict]) -> list[GalleryStop]:
+    """
+    Filter, route, and group artworks into an ordered list of GalleryStop objects.
+
+    Steps:
+      1. Filter out Cloisters artworks (department == "The Cloisters").
+      2. Filter out artworks whose coords resolve to sentinel (99.0, 99.0, 99.0).
+      3. Call nearest_neighbor_route on the remaining routable artworks.
+      4. Group consecutive artworks by stop label.
+      5. Derive floor from the first artwork in each group's z-coordinate.
+
+    Returns an ordered list[GalleryStop] reflecting the walking sequence.
+    """
+    SENTINEL = (99.0, 99.0, 99.0)
+
+    # Step 1: remove Cloisters
+    filtered = [
+        a
+        for a in artworks
+        if (a.get("department") or a.get("Department") or "").strip() != "The Cloisters"
+    ]
+
+    # Step 2: remove sentinel-coordinate artworks
+    routable = [a for a in filtered if get_coords(a) != SENTINEL]
+
+    if not routable:
+        return []
+
+    # Step 3: route
+    routed = nearest_neighbor_route(routable)
+
+    # Step 4 & 5: group by stop label, preserving order
+    stops: list[GalleryStop] = []
+    current_label: str | None = None
+    current_artworks: list[TourArtwork] = []
+    current_floor: int = 1
+    current_x: float = 0.0
+    current_y: float = 0.0
+
+    for art in routed:
+        label = _stop_label(art)
+        if label != current_label:
+            if current_label is not None:
+                stops.append(
+                    GalleryStop(
+                        stop_label=current_label,
+                        floor=current_floor,
+                        x=current_x,
+                        y=current_y,
+                        artworks=current_artworks,
+                    )
+                )
+            current_label = label
+            current_artworks = []
+            cx, cy, z = get_coords(art)
+            current_floor = int(z // FLOOR_PENALTY)
+            current_x = cx
+            current_y = cy
+
+        current_artworks.append(
+            TourArtwork(
+                object_id=art.get("object_id") or art.get("objectID") or 0,
+                title=art.get("title", ""),
+                artist_display_name=art.get("artist_display_name"),
+                primary_image_small=art.get("primary_image_small"),
+                object_url=art.get("object_url", ""),
+                # Use the fetched GalleryNumber; fall back to the stop label's
+                # gallery number when the API didn't return one (e.g. artwork
+                # routed via ROOM_COORDS but GalleryNumber not in API response).
+                gallery_number=(str(art.get("GalleryNumber", "")).strip() or None)
+                or (
+                    label.replace("Gallery ", "")
+                    if label.startswith("Gallery ")
+                    else None
+                ),
+            )
+        )
+
+    # Flush the last group
+    if current_label is not None and current_artworks:
+        stops.append(
+            GalleryStop(
+                stop_label=current_label,
+                floor=current_floor,
+                x=current_x,
+                y=current_y,
+                artworks=current_artworks,
+            )
+        )
+
+    return stops
+
+
+def build_tour(artworks: list[dict]) -> list[GalleryStop]:
+    """
+    Main entry point: filter artworks and return an ordered list of GalleryStop objects.
+    """
+    return group_by_stop(artworks)
+
+
+# ---------------------------------------------------------------------------
+# Gallery number fetcher
+# ---------------------------------------------------------------------------
+
+MET_OBJECT_URL = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{}"
+_SEMAPHORE = asyncio.Semaphore(80)
+
+
+async def fetch_gallery_number(
+    object_id: int,
+    cache: dict,
+    client: httpx.AsyncClient,
+) -> str | None:
+    if object_id in cache:
+        return cache[object_id]
+    async with _SEMAPHORE:
+        try:
+            resp = await client.get(MET_OBJECT_URL.format(object_id), timeout=5.0)
+            resp.raise_for_status()
+            data = resp.json()
+            gallery = (data.get("GalleryNumber") or "").strip() or None
+        except Exception:
+            gallery = None
+    cache[object_id] = gallery
+    return gallery
+
+
+async def fetch_all_gallery_numbers(
+    object_ids: list[int],
+    cache: dict,
+    client: httpx.AsyncClient,
+) -> dict[int, str | None]:
+    tasks = [fetch_gallery_number(oid, cache, client) for oid in object_ids]
+    results = await asyncio.gather(*tasks)
+    return dict(zip(object_ids, results))
+
+
+# ---------------------------------------------------------------------------
+# POST /tour endpoint
+# ---------------------------------------------------------------------------
+
+try:
+    from app.backend.models import TourRequest, TourResponse
+except ModuleNotFoundError:
+    from models import TourRequest, TourResponse  # type: ignore[no-redef]
+
+from fastapi import APIRouter
+from fastapi import Request as FastAPIRequest
+
+router = APIRouter()
+
+
+@router.post("/tour", response_model=TourResponse)
+async def tour_endpoint(
+    request: TourRequest, http_request: FastAPIRequest
+) -> TourResponse:
+    cache = http_request.app.state.gallery_cache
+
+    object_ids = [a.object_id for a in request.artworks]
+
+    async with httpx.AsyncClient() as client:
+        gallery_map = await fetch_all_gallery_numbers(object_ids, cache, client)
+
+    # Build artwork dicts merging input metadata with fetched gallery numbers
+    artworks = [
+        {
+            "object_id": a.object_id,
+            "title": a.title,
+            "artist_display_name": a.artist_display_name,
+            "primary_image_small": a.primary_image_small,
+            "object_url": a.object_url,
+            "department": a.department,
+            "GalleryNumber": a.gallery_number or gallery_map.get(a.object_id),
+        }
+        for a in request.artworks
+    ]
+
+    stops = group_by_stop(artworks)
+
+    routable_count = sum(len(s.artworks) for s in stops)
+    excluded_count = len(request.artworks) - routable_count
+
+    return TourResponse(
+        stops=stops,
+        total_input=len(request.artworks),
+        routable_count=routable_count,
+        excluded_count=excluded_count,
+    )

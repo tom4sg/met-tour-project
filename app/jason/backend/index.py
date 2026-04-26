@@ -67,6 +67,22 @@ class EmbeddingIndex:
         # Extract objectID from objectURL (e.g. https://…/search/460813 → 460813)
         df["objectID"] = df["objectURL"].str.extract(r"/(\d+)$")[0].astype("Int64")
 
+        # Enrich with GalleryNumber from met_on_view.csv if available
+        on_view_path = metadata_path.parent.parent / "processed" / "met_on_view.csv"
+        if on_view_path.exists():
+            on_view = pd.read_csv(
+                on_view_path,
+                usecols=["objectID", "GalleryNumber"],
+                dtype={"objectID": "Int64", "GalleryNumber": str},
+            )
+            on_view["GalleryNumber"] = on_view["GalleryNumber"].str.strip()
+            on_view = on_view[
+                on_view["GalleryNumber"].notna() & (on_view["GalleryNumber"] != "")
+            ]
+            df = df.merge(on_view, on="objectID", how="left")
+        else:
+            df["GalleryNumber"] = None
+
         # Build the CLIP-embedded mask
         clip_mask = (df["clip_embedding_status"] == "embedded").to_numpy()
         clip_positions = np.where(clip_mask)[0]  # integer positions in df
@@ -160,4 +176,5 @@ class EmbeddingIndex:
             "primary_image": _str_or_none("primaryImage"),
             "object_url": object_url,
             "is_highlight": _bool_val("isHighlight_converted"),
+            "gallery_number": _str_or_none("GalleryNumber"),
         }

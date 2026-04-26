@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Image from "next/image";
 import type { ArtworkResult } from "../types/search";
 
@@ -10,10 +10,31 @@ interface ArtworkCardProps {
 
 export default function ArtworkCard({ result }: ArtworkCardProps) {
   const [imageError, setImageError] = useState(false);
+  const [galleryNumber, setGalleryNumber] = useState<string | null>(null);
 
   const imageUrl = result.primary_image_small || result.primary_image;
   const showPlaceholder = !imageUrl || imageError;
   const matchPercent = Math.round(result.score * 100);
+
+  // Lazy-fetch gallery number from Met Collection API
+  useEffect(() => {
+    let cancelled = false;
+    const fetchGallery = async () => {
+      try {
+        const resp = await fetch(
+          `https://collectionapi.metmuseum.org/public/collection/v1/objects/${result.object_id}`,
+        );
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const gn = (data.GalleryNumber || "").trim();
+        if (!cancelled && gn) setGalleryNumber(gn);
+      } catch {
+        // silently ignore — gallery number is supplemental
+      }
+    };
+    fetchGallery();
+    return () => { cancelled = true; };
+  }, [result.object_id]);
 
   return (
     <a
@@ -65,10 +86,20 @@ export default function ArtworkCard({ result }: ArtworkCardProps) {
         {result.object_date && (
           <p className="text-xs text-met-charcoal/60">{result.object_date}</p>
         )}
-        {result.department && (
-          <p className="text-xs text-met-gold font-medium">
-            {result.department}
-          </p>
+        {(result.department || galleryNumber) && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            {result.department && (
+              <p className="text-xs text-met-gold font-medium">
+                {result.department}
+              </p>
+            )}
+            {galleryNumber && (
+              <span className="inline-flex items-center gap-0.5 text-xs text-met-charcoal/60 bg-met-charcoal/5 px-1.5 py-0.5 rounded">
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                Gallery {galleryNumber}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </a>

@@ -8,12 +8,14 @@ interface SearchFormProps {
   onResults: (response: SearchResponse) => void;
   onLoading: (loading: boolean) => void;
   onError: (error: string | null) => void;
+  onQuery: (query: string) => void;
 }
 
 export default function SearchForm({
   onResults,
   onLoading,
   onError,
+  onQuery,
 }: SearchFormProps) {
   const [mode, setMode] = useState<SearchMode>("text");
   const [query, setQuery] = useState("");
@@ -86,6 +88,7 @@ export default function SearchForm({
     setValidationError(null);
     onLoading(true);
     onError(null);
+    onQuery(query.trim());
 
     try {
       const response = await searchArtworks({
