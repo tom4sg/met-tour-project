@@ -14,9 +14,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
-import torch
-from sentence_transformers import SentenceTransformer
-from transformers import AutoProcessor, CLIPModel
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -24,7 +21,7 @@ if str(ROOT) not in sys.path:
 
 from src.embedding.embed_prep import load_pil_image
 from src.search.met_tour_routing import FLOOR_PENALTY, build_tour, get_coords, group_by_stop
-from src.search.query_cluster import assign_cluster, load_gmm
+from src.search.query_cluster import assign_cluster, embed_query, load_gmm
 from src.search.retrieval import cosine_search
 
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
@@ -56,6 +53,8 @@ DISPLAY_FIELDS = [
 
 @st.cache_resource(show_spinner="Loading CLIP model...")
 def _load_clip():
+    import torch
+    from transformers import AutoProcessor, CLIPModel
     device = "cuda" if torch.cuda.is_available() else ("mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu")
     model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).eval().to(device)
     processor = AutoProcessor.from_pretrained(CLIP_MODEL_NAME)
@@ -64,6 +63,8 @@ def _load_clip():
 
 @st.cache_resource(show_spinner="Loading text model...")
 def _load_text_model():
+    import torch
+    from sentence_transformers import SentenceTransformer
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return SentenceTransformer(TEXT_MODEL_NAME, device=device)
 
@@ -87,26 +88,6 @@ def _load_cluster_indices():
 @st.cache_data(show_spinner="Loading metadata...")
 def _load_metadata():
     return pd.read_csv(METADATA_PATH)
-
-
-# ── Embedding ─────────────────────────────────────────────────────────────────
-
-def _l2(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    return v / max(float(np.linalg.norm(v)), eps)
-
-
-def embed_query(text: str, clip_weight: float = 1.0, text_weight: float = 1.0) -> np.ndarray:
-    clip_model, clip_proc, device = _load_clip()
-    inputs = clip_proc(text=[text], return_tensors="pt", padding=True, truncation=True)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    with torch.inference_mode():
-        clip_vec = clip_model.get_text_features(**inputs).cpu().numpy().squeeze(0).astype(np.float32)
-
-    st_model = _load_text_model()
-    text_vec = st_model.encode([text], convert_to_numpy=True, normalize_embeddings=True)[0].astype(np.float32)
-
-    joint = np.concatenate([_l2(clip_vec) * clip_weight, _l2(text_vec) * text_weight])
-    return _l2(joint)
 
 
 # ── Image display ─────────────────────────────────────────────────────────────
@@ -142,8 +123,19 @@ def main() -> None:
     if not query.strip():
         st.stop()
 
+    clip_model, clip_proc, device = _load_clip()
+    st_model = _load_text_model()
+
     with st.spinner("Embedding query..."):
-        query_vec = embed_query(query.strip(), clip_weight=clip_weight, text_weight=text_weight)
+        query_vec = embed_query(
+            query.strip(),
+            clip_weight=clip_weight,
+            text_weight=text_weight,
+            clip_model=clip_model,
+            clip_processor=clip_proc,
+            text_model=st_model,
+            device=device,
+        )
 
     gmm = _load_gmm()
     clusters = assign_cluster(query_vec, gmm, top_k=top_clusters)

@@ -49,34 +49,39 @@ def embed_query(
     text_model_name: str = DEFAULT_TEXT_MODEL,
     clip_weight: float = 1.0,
     text_weight: float = 1.0,
+    clip_model: CLIPModel | None = None,
+    clip_processor: AutoProcessor | None = None,
+    text_model: SentenceTransformer | None = None,
+    device: str | None = None,
 ) -> np.ndarray:
     """
     Embed a text query into the joint space, matching embed_pipeline.build_joint_embeddings.
 
-    Artworks use CLIP image + sentence-transformer text.
-    Queries use CLIP text + sentence-transformer text so both sides share the
-    same CLIP semantic space alongside the richer metadata dimensions.
+    Pass pre-loaded clip_model, clip_processor, and text_model to avoid reloading
+    on every call (e.g. when called from a Streamlit app with cached models).
+    If not provided, models are loaded from clip_model_name / text_model_name.
     """
-    device = _resolve_device()
+    resolved_device = device or _resolve_device()
 
-    # CLIP text features
-    clip_model = CLIPModel.from_pretrained(clip_model_name).eval().to(device)
-    clip_proc = AutoProcessor.from_pretrained(clip_model_name)
-    inputs = clip_proc(text=[text], return_tensors="pt", padding=True, truncation=True)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
+    if clip_model is None or clip_processor is None:
+        clip_model = CLIPModel.from_pretrained(clip_model_name).eval().to(resolved_device)
+        clip_processor = AutoProcessor.from_pretrained(clip_model_name)
+
+    if text_model is None:
+        text_model = SentenceTransformer(text_model_name, device=resolved_device)
+
+    inputs = clip_processor(text=[text], return_tensors="pt", padding=True, truncation=True)
+    inputs = {k: v.to(resolved_device) for k, v in inputs.items()}
     with torch.inference_mode():
         clip_feat = clip_model.get_text_features(**inputs)
     clip_vec = clip_feat.cpu().numpy().squeeze(0).astype(np.float32)  # (512,)
 
-    # Sentence-transformer text features
-    st_model = SentenceTransformer(text_model_name, device=device)
-    text_vec = st_model.encode(
+    text_vec = text_model.encode(
         [text],
         convert_to_numpy=True,
         normalize_embeddings=True,
     )[0].astype(np.float32)  # (384,)
 
-    # Replicate build_joint_embeddings: weight, concat, normalize
     weighted_clip = _l2_normalize(clip_vec) * np.float32(clip_weight)
     weighted_text = _l2_normalize(text_vec) * np.float32(text_weight)
     joint = np.concatenate([weighted_clip, weighted_text])  # (896,)
