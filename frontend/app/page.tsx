@@ -9,9 +9,7 @@ import TourPanel from "../components/TourPanel";
 import type { SearchResponse } from "../types/search";
 
 export default function HomePage() {
-  const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(
-    null,
-  );
+  const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -20,10 +18,9 @@ export default function HomePage() {
 
   return (
     <div className="flex flex-col items-center">
-      {/* Hero — only shown before first search */}
       {showHero && <HeroSection />}
 
-      {/* Search form — always visible */}
+      {/* Search form */}
       <div className="w-full px-4 py-6 flex justify-center">
         <div className="w-full max-w-2xl bg-white rounded-lg shadow-md px-4 py-6 md:px-6">
           <SearchForm
@@ -56,12 +53,11 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Loading state */}
       {isLoading && <LoadingState />}
 
-      {/* Results */}
+      {/* Results + Tour */}
       {!isLoading && searchResponse && (
-        <div className="w-full transition-opacity duration-300">
+        <div className="w-full px-4 md:px-8 py-6">
           <ResultsGrid
             results={searchResponse.results}
             totalResults={searchResponse.total_results}

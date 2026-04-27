@@ -25,6 +25,7 @@ class ArtworkResult(BaseModel):
     gallery_number: str | None = None
 
 
+
 class SearchResponse(BaseModel):
     results: list[ArtworkResult]
     query_mode: SearchMode

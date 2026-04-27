@@ -1,3 +1,5 @@
+import type { SearchViz } from "./viz";
+
 export type SearchMode = "text" | "image" | "joint";
 
 export interface ArtworkResult {
@@ -20,6 +22,7 @@ export interface SearchResponse {
   query_mode: SearchMode;
   total_results: number;
   text_weight?: number;
+  viz?: SearchViz;
 }
 
 export interface SearchParams {

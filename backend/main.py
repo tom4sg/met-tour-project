@@ -4,6 +4,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
@@ -36,6 +37,7 @@ app.add_middleware(
 )
 
 app.include_router(tour_router)
+
 
 
 @app.get("/health", response_model=HealthResponse)

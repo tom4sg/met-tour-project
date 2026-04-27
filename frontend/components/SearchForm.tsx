@@ -154,18 +154,16 @@ export default function SearchForm({
               >
                 GMM clusters
               </label>
-              <select
+              <input
                 id="top-clusters"
+                type="number"
+                min={1}
+                max={320}
+                step={1}
                 value={topClusters}
-                onChange={(e) => setTopClusters(Number(e.target.value))}
-                className="min-h-[44px] min-w-[44px] px-3 py-2 border border-met-charcoal rounded bg-met-cream text-met-charcoal focus:outline-none focus:ring-2 focus:ring-met-red"
-              >
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
+                onChange={(e) => setTopClusters(Math.min(320, Math.max(1, parseInt(e.target.value) || 1)))}
+                className="min-h-[44px] w-20 px-3 py-2 border border-met-charcoal rounded bg-met-cream text-met-charcoal focus:outline-none focus:ring-2 focus:ring-met-red"
+              />
             </div>
           </div>
         )}

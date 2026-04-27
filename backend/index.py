@@ -46,8 +46,19 @@ class EmbeddingIndex:
         norms = np.where(norms == 0, 1.0, norms)
         self.joint_matrix = raw / norms
 
-        # GMM parameters
-        gmm_path = embeddings_dir / "gmm_joint.npz"
+        # GMM parameters — resolve filenames via manifest
+        manifest_path = embeddings_dir / "gmm_manifest.json"
+        if not manifest_path.exists():
+            print(f"Missing: {manifest_path} — run cluster_gmm first", file=sys.stderr)
+            sys.exit(1)
+        manifests = json.loads(manifest_path.read_text(encoding="utf-8"))
+        joint_entry = next((m for m in reversed(manifests) if m["space"] == "joint"), None)
+        if joint_entry is None:
+            print("gmm_manifest.json has no joint space entry — run cluster_gmm first", file=sys.stderr)
+            sys.exit(1)
+        gmm_path = embeddings_dir / joint_entry["artifacts"]["npz"]
+        idx_path = embeddings_dir / joint_entry["artifacts"]["indices_json"]
+
         if not gmm_path.exists():
             print(f"Missing: {gmm_path} — run cluster_gmm first", file=sys.stderr)
             sys.exit(1)
@@ -60,7 +71,6 @@ class EmbeddingIndex:
         self.gmm = {k: gmm_data[k].astype(np.float64) for k in required}
 
         # Cluster membership index
-        idx_path = embeddings_dir / "gmm_joint_indices.json"
         if not idx_path.exists():
             print(f"Missing: {idx_path}", file=sys.stderr)
             sys.exit(1)
