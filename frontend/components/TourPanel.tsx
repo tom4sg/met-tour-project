@@ -127,13 +127,13 @@ function exportTourPDF(stops: GalleryStop[], query: string) {
   <p style="margin-top:32px;font-size:11px;color:#aaa;text-align:center;">Generated from Met Museum Tour Planner</p>
 </body></html>`;
 
-  const win = window.open("", "_blank");
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, "_blank");
   if (!win) {
     alert("Please allow popups to export your tour as PDF.");
-    return;
   }
-  win.document.write(html);
-  win.document.close();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export default function TourPanel({ artworks, query }: TourPanelProps) {
@@ -236,7 +236,7 @@ export default function TourPanel({ artworks, query }: TourPanelProps) {
         <>
           {/* Summary row */}
           <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <p className="text-sm font-semibold text-met-charcoal">
+            <p className="text-base font-semibold text-met-charcoal">
               {data.stops.length} {data.stops.length === 1 ? "stop" : "stops"}
             </p>
 
@@ -245,7 +245,7 @@ export default function TourPanel({ artworks, query }: TourPanelProps) {
               <button
                 onClick={handleExportPDF}
                 className="
-                  inline-flex items-center gap-1.5 text-xs font-semibold
+                  inline-flex items-center gap-1.5 text-sm font-semibold
                   px-3 py-1.5 rounded border border-met-charcoal/20
                   text-met-charcoal hover:bg-met-charcoal hover:text-met-cream
                   transition-colors duration-150
@@ -274,7 +274,7 @@ export default function TourPanel({ artworks, query }: TourPanelProps) {
                 href="https://maps.metmuseum.org"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-met-gold font-medium hover:underline"
+                className="text-sm text-met-gold font-medium hover:underline"
               >
                 Open Met Map ↗
               </a>
@@ -283,7 +283,7 @@ export default function TourPanel({ artworks, query }: TourPanelProps) {
 
           {/* Gallery route summary */}
           {galleryNumbers.length > 0 && (
-            <p className="text-xs text-met-charcoal/60 mb-4">
+            <p className="text-sm text-met-charcoal/60 mb-4">
               Galleries: {galleryNumbers.join(" → ")}
             </p>
           )}

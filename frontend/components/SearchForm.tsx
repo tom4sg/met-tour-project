@@ -21,7 +21,7 @@ export default function SearchForm({
   const [topK, setTopK] = useState(20);
   const [clipWeight, setClipWeight] = useState(1.0);
   const [stWeight, setStWeight] = useState(1.0);
-  const [topClusters, setTopClusters] = useState(2);
+  const [topClusters, setTopClusters] = useState(60);
   const [gmmK, setGmmK] = useState<320 | 48>(320);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
