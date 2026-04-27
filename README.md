@@ -18,7 +18,7 @@ Queries are encoded into a 896-dimensional joint embedding space (CLIP + Sentenc
 
 ## Setup
 
-Before anything, make sure you have downloaded the necessary files folder containing embeddings, metadata and GMM artifacts, which can be found in the Google Drive here: [Download](https://drive.google.com/drive/folders/1UqgmWO18c2PIWrXasvQcSkwSpj7BCA4B?usp=sharing)
+Before anything, make sure you have downloaded the required artifacts from Google Drive: [Download](https://drive.google.com/drive/folders/1UqgmWO18c2PIWrXasvQcSkwSpj7BCA4B?usp=sharing). The Drive contains an `embeddings/metart/` folder — place its contents into the `embeddings/metart/` directory in this repo (keep the directory structure intact! Do not replace the whole `embeddings/` folder, as the current path is important).
 
 Also, if you don't have Node.js already, download it here: [nodejs.org](https://nodejs.org/en)
 
