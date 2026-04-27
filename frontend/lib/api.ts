@@ -35,6 +35,10 @@ export async function searchArtworks(
     formData.append("top_clusters", String(params.top_clusters));
   }
 
+  if (params.gmm_k !== undefined) {
+    formData.append("gmm_k", String(params.gmm_k));
+  }
+
   let response: Response;
   try {
     response = await fetch(`${API_URL}/search`, {

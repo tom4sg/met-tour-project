@@ -31,9 +31,30 @@ def _l2_normalize(vec: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 
 class EmbeddingIndex:
     joint_matrix: np.ndarray         # (N, 896) float32, unit-normalized
-    gmm: dict                        # means, covariances, weights, scaler_mean, scaler_scale
-    cluster_indices: dict            # str(cluster_id) -> list[int]
+    gmm_by_k: dict                   # {n_components: {means, covariances, weights, scaler_mean, scaler_scale}}
+    cluster_indices_by_k: dict       # {n_components: {str(cluster_id): [row_indices]}}
+    available_ks: list[int]          # sorted list of loaded K values
     metadata: pd.DataFrame
+
+    def _load_gmm_entry(self, embeddings_dir: Path, entry: dict) -> tuple[dict, dict]:
+        gmm_path = embeddings_dir / entry["artifacts"]["npz"]
+        idx_path = embeddings_dir / entry["artifacts"]["indices_json"]
+        if not gmm_path.exists():
+            print(f"Missing: {gmm_path} — run cluster_gmm first", file=sys.stderr)
+            sys.exit(1)
+        if not idx_path.exists():
+            print(f"Missing: {idx_path} — run cluster_gmm first", file=sys.stderr)
+            sys.exit(1)
+        gmm_data = np.load(gmm_path)
+        required = {"means", "covariances", "weights", "scaler_mean", "scaler_scale"}
+        missing = required - set(gmm_data.files)
+        if missing:
+            print(f"GMM file missing keys: {missing}", file=sys.stderr)
+            sys.exit(1)
+        gmm = {k: gmm_data[k].astype(np.float64) for k in required}
+        with open(idx_path) as f:
+            cluster_indices = json.load(f)
+        return gmm, cluster_indices
 
     def load(self, embeddings_dir: Path, metadata_path: Path) -> None:
         # Joint embeddings
@@ -46,36 +67,31 @@ class EmbeddingIndex:
         norms = np.where(norms == 0, 1.0, norms)
         self.joint_matrix = raw / norms
 
-        # GMM parameters — resolve filenames via manifest
+        # Load all GMM artifacts from manifest
         manifest_path = embeddings_dir / "gmm_manifest.json"
         if not manifest_path.exists():
             print(f"Missing: {manifest_path} — run cluster_gmm first", file=sys.stderr)
             sys.exit(1)
         manifests = json.loads(manifest_path.read_text(encoding="utf-8"))
-        joint_entry = next((m for m in reversed(manifests) if m["space"] == "joint"), None)
-        if joint_entry is None:
+        joint_entries = [m for m in manifests if m["space"] == "joint"]
+        if not joint_entries:
             print("gmm_manifest.json has no joint space entry — run cluster_gmm first", file=sys.stderr)
             sys.exit(1)
-        gmm_path = embeddings_dir / joint_entry["artifacts"]["npz"]
-        idx_path = embeddings_dir / joint_entry["artifacts"]["indices_json"]
 
-        if not gmm_path.exists():
-            print(f"Missing: {gmm_path} — run cluster_gmm first", file=sys.stderr)
-            sys.exit(1)
-        gmm_data = np.load(gmm_path)
-        required = {"means", "covariances", "weights", "scaler_mean", "scaler_scale"}
-        missing = required - set(gmm_data.files)
-        if missing:
-            print(f"GMM file missing keys: {missing}", file=sys.stderr)
-            sys.exit(1)
-        self.gmm = {k: gmm_data[k].astype(np.float64) for k in required}
+        # Deduplicate by n_components, keeping the last run for each K
+        seen: dict[int, dict] = {}
+        for entry in joint_entries:
+            seen[entry["n_components"]] = entry
 
-        # Cluster membership index
-        if not idx_path.exists():
-            print(f"Missing: {idx_path}", file=sys.stderr)
-            sys.exit(1)
-        with open(idx_path) as f:
-            self.cluster_indices = json.load(f)
+        self.gmm_by_k = {}
+        self.cluster_indices_by_k = {}
+        for k, entry in seen.items():
+            gmm, cluster_indices = self._load_gmm_entry(embeddings_dir, entry)
+            self.gmm_by_k[k] = gmm
+            self.cluster_indices_by_k[k] = cluster_indices
+            print(f"  Loaded GMM K={k} ({entry['artifacts']['npz']})")
+
+        self.available_ks = sorted(self.gmm_by_k.keys())
 
         # Metadata
         if not metadata_path.exists():
@@ -85,11 +101,11 @@ class EmbeddingIndex:
 
     # ── GMM assignment ─────────────────────────────────────────────────────
 
-    def _top_cluster_ids(self, query_vec: np.ndarray, top_k: int = DEFAULT_TOP_CLUSTERS) -> list[int]:
-        x = (query_vec.astype(np.float64) - self.gmm["scaler_mean"]) / self.gmm["scaler_scale"]
-        means = self.gmm["means"]
-        covs = self.gmm["covariances"]
-        weights = self.gmm["weights"]
+    def _top_cluster_ids(self, query_vec: np.ndarray, gmm: dict, top_k: int = DEFAULT_TOP_CLUSTERS) -> list[int]:
+        x = (query_vec.astype(np.float64) - gmm["scaler_mean"]) / gmm["scaler_scale"]
+        means = gmm["means"]
+        covs = gmm["covariances"]
+        weights = gmm["weights"]
         log_ll = -0.5 * np.sum(((x - means) ** 2) / covs + np.log(2 * np.pi * covs), axis=1)
         log_post = np.log(weights) + log_ll
         log_post -= _logsumexp(log_post)
@@ -103,14 +119,19 @@ class EmbeddingIndex:
         mode: SearchMode,
         top_k: int,
         top_clusters: int = DEFAULT_TOP_CLUSTERS,
+        gmm_k: int | None = None,
     ) -> list[SearchHit]:
         """GMM-filtered cosine search. `mode` is accepted for API compatibility but unused
         — all queries go through the joint embedding space."""
-        cluster_ids = self._top_cluster_ids(query_vec, top_clusters)
+        k = gmm_k if gmm_k in self.gmm_by_k else self.available_ks[-1]
+        gmm = self.gmm_by_k[k]
+        cluster_indices = self.cluster_indices_by_k[k]
+
+        cluster_ids = self._top_cluster_ids(query_vec, gmm, top_clusters)
 
         candidate_pool: list[int] = []
         for cid in cluster_ids:
-            candidate_pool.extend(self.cluster_indices[str(cid)])
+            candidate_pool.extend(cluster_indices[str(cid)])
 
         if not candidate_pool:
             return []

@@ -56,6 +56,7 @@ async def search(
     clip_weight: float = Form(1.0),
     st_weight: float = Form(1.0),
     top_clusters: int = Form(2),
+    gmm_k: int | None = Form(None),
 ) -> SearchResponse:
     # Validate mode
     if mode not in {"text", "image", "joint"}:
@@ -134,7 +135,7 @@ async def search(
             clip_weight=clip_weight, st_weight=st_weight,
         )
 
-    hits = index.search(query_vec, search_mode, top_k, top_clusters=top_clusters)
+    hits = index.search(query_vec, search_mode, top_k, top_clusters=top_clusters, gmm_k=gmm_k)
 
     results = []
     for hit in hits:

@@ -34,6 +34,7 @@ export interface SearchParams {
   clip_weight?: number;
   st_weight?: number;
   top_clusters?: number;
+  gmm_k?: number;
 }
 
 export class ApiError extends Error {

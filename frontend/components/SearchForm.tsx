@@ -22,6 +22,7 @@ export default function SearchForm({
   const [clipWeight, setClipWeight] = useState(1.0);
   const [stWeight, setStWeight] = useState(1.0);
   const [topClusters, setTopClusters] = useState(2);
+  const [gmmK, setGmmK] = useState<320 | 48>(320);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -47,6 +48,7 @@ export default function SearchForm({
         clip_weight: clipWeight,
         st_weight: stWeight,
         top_clusters: topClusters,
+        gmm_k: gmmK,
       });
       onResults(response);
       onLoading(false);
@@ -146,24 +148,50 @@ export default function SearchForm({
               <p className="text-xs text-met-charcoal/70">{stWeight.toFixed(2)}</p>
             </div>
 
-            {/* GMM clusters */}
-            <div className="flex items-center gap-3">
-              <label
-                htmlFor="top-clusters"
-                className="text-sm font-medium text-met-charcoal whitespace-nowrap"
-              >
-                GMM clusters
-              </label>
-              <input
-                id="top-clusters"
-                type="number"
-                min={1}
-                max={320}
-                step={1}
-                value={topClusters}
-                onChange={(e) => setTopClusters(Math.min(320, Math.max(1, parseInt(e.target.value) || 1)))}
-                className="min-h-[44px] w-20 px-3 py-2 border border-met-charcoal rounded bg-met-cream text-met-charcoal focus:outline-none focus:ring-2 focus:ring-met-red"
-              />
+            {/* Clusters searched + GMM K side by side */}
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-3">
+                <label
+                  htmlFor="top-clusters"
+                  className="text-sm font-medium text-met-charcoal whitespace-nowrap"
+                >
+                  Clusters searched
+                </label>
+                <input
+                  id="top-clusters"
+                  type="number"
+                  min={1}
+                  max={320}
+                  step={1}
+                  value={topClusters}
+                  onChange={(e) => setTopClusters(Math.min(320, Math.max(1, parseInt(e.target.value) || 1)))}
+                  className="min-h-[44px] w-20 px-3 py-2 border border-met-charcoal rounded bg-met-cream text-met-charcoal focus:outline-none focus:ring-2 focus:ring-met-red"
+                />
+              </div>
+
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium text-met-charcoal whitespace-nowrap">
+                  GMM K
+                </label>
+                <div className="flex rounded border border-met-charcoal overflow-hidden">
+                  {([48, 320] as const).map((k, i) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setGmmK(k)}
+                      className={`min-h-[44px] px-4 py-2 text-sm font-medium transition-colors ${
+                        i > 0 ? "border-l border-met-charcoal" : ""
+                      } ${
+                        gmmK === k
+                          ? "bg-met-red text-white"
+                          : "bg-met-cream text-met-charcoal hover:bg-met-gold/20"
+                      }`}
+                    >
+                      {k}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         )}
