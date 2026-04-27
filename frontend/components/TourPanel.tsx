@@ -6,6 +6,13 @@ import type { TourResponse, GalleryStop } from "../types/tour";
 import { generateTour } from "../lib/tourApi";
 import GalleryStopCard from "./GalleryStopCard";
 import TourMapOverlay from "./TourMapOverlay";
+import {
+  FLOOR_CONFIG,
+  polyToPixel,
+  loadPixelTable,
+  LABEL_OFFSET_X,
+  LABEL_OFFSET_Y,
+} from "../lib/mapUtils";
 
 interface TourPanelProps {
   artworks: ArtworkResult[];
@@ -18,122 +25,139 @@ type TourState =
   | { status: "success"; data: TourResponse }
   | { status: "error"; message: string };
 
-function extractGalleryNumbers(stopLabels: string[]): string[] {
-  return stopLabels
-    .filter((label) => label.startsWith("Gallery "))
-    .map((label) => label.replace("Gallery ", ""));
+
+function galleryRoute(stops: GalleryStop[]): string[] {
+  return stops
+    .filter((s) => s.stop_label.startsWith("Gallery "))
+    .map((s) => s.stop_label.replace("Gallery ", ""));
 }
 
-// ---------------------------------------------------------------------------
-// PDF Export — opens a new window with a print-ready tour page
-// ---------------------------------------------------------------------------
-function exportTourPDF(stops: GalleryStop[], query: string) {
-  const floors = Array.from(new Set(stops.map((s) => s.floor))).sort();
-  const galleryRoute = extractGalleryNumbers(stops.map((s) => s.stop_label));
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function exportTourPDF(stops: GalleryStop[], query: string, excludedCount = 0) {
+  const pixelTable = await loadPixelTable();
+  const floors = Array.from(new Set(stops.map((s) => s.floor))).sort() as (1 | 2)[];
+  const MET_RED = "#E31837";
+  const STOP_R = 16;
+
+  function resolvePixel(stop: GalleryStop & { globalIndex: number }, floor: 1 | 2): [number, number] {
+    const galleryNum = stop.stop_label.replace("Gallery ", "").trim();
+    const entry = pixelTable[String(floor)]?.[galleryNum];
+    const [px, py] = entry ?? polyToPixel(stop.x, stop.y, floor);
+    return [px + LABEL_OFFSET_X, py + LABEL_OFFSET_Y];
+  }
+
+  // Embed floor images as base64 so they always render in print
+  const floorDataUrls: Record<number, string> = {};
+  await Promise.all(
+    floors.map(async (f) => {
+      const res = await fetch(`/met-floor${f}.png`);
+      const blob = await res.blob();
+      floorDataUrls[f] = await blobToDataUrl(blob);
+    }),
+  );
+
+  const stopsWithIdx = stops.map((s, i) => ({ ...s, globalIndex: i }));
 
   const floorSections = floors
     .map((f) => {
-      const floorStops = stops.filter((s) => s.floor === f);
-      const mapUrl = `https://maps.metmuseum.org/?screenmode=base&floor=${f}`;
+      const cfg = FLOOR_CONFIG[f];
+      const floorStops = stopsWithIdx.filter((s) => s.floor === f);
 
-      // Build a visual gallery route diagram instead of an iframe
-      // (iframes with cross-origin maps cannot render in print/PDF)
-      const routeBubbles = floorStops
-        .map((stop, i) => {
-          const globalIdx = stops.indexOf(stop) + 1;
-          const galleryNum = stop.stop_label.replace("Gallery ", "");
-          const arrow =
-            i < floorStops.length - 1
-              ? `<span style="color:#ccc;font-size:20px;margin:0 4px;">→</span>`
-              : "";
-          return `<span style="display:inline-flex;align-items:center;margin:4px 0;">
-            <span style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:2px solid #E31837;border-radius:20px;padding:4px 12px 4px 4px;">
-              <span style="width:24px;height:24px;border-radius:50%;background:#E31837;color:white;display:inline-flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;flex-shrink:0;">${globalIdx}</span>
-              <span style="font-size:13px;font-weight:600;color:#1a1a1a;">${galleryNum}</span>
-            </span>${arrow}</span>`;
+      const pathD =
+        floorStops.length > 1
+          ? `M ${floorStops.map((s) => resolvePixel(s, f).join(",")).join(" L ")}`
+          : "";
+
+      const circles = floorStops
+        .map((s) => {
+          const [px, py] = resolvePixel(s, f);
+          return `<circle cx="${px}" cy="${py}" r="${STOP_R}" fill="${MET_RED}" stroke="white" stroke-width="2.5"/>
+<text x="${px}" y="${py}" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="bold" fill="white" font-family="system-ui,sans-serif">${s.globalIndex + 1}</text>`;
         })
         .join("");
+
+      const mapSvg = `<svg viewBox="0 0 ${cfg.imgW} ${cfg.imgH}" style="width:100%;display:block;border:1px solid #ddd;">
+  <image href="${floorDataUrls[f]}" x="0" y="0" width="${cfg.imgW}" height="${cfg.imgH}" preserveAspectRatio="none"/>
+  ${pathD ? `<path d="${pathD}" stroke="${MET_RED}" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.85"/>` : ""}
+  ${circles}
+</svg>`;
 
       const stopItems = floorStops
         .map((stop) => {
-          const globalIdx = stops.indexOf(stop) + 1;
-          const galleryNum = stop.stop_label.startsWith("Gallery ")
-            ? stop.stop_label.replace("Gallery ", "")
-            : null;
-          const artworkList = stop.artworks
+          const artworkItems = stop.artworks
             .map(
               (a) =>
-                `<li style="margin:2px 0;font-size:13px;"><a href="${a.object_url}" target="_blank" style="color:#1a1a1a;font-weight:500;text-decoration:none;border-bottom:1px solid #ccc;">${a.title}</a>${a.artist_display_name ? ` <span style="color:#888;">— ${a.artist_display_name}</span>` : ""}${a.gallery_number ? ` <span style="background:#f0ece4;border-radius:4px;padding:1px 5px;color:#666;font-size:11px;font-weight:600;">Gallery ${a.gallery_number}</span>` : ""}</li>`,
+                `<li><a href="${a.object_url}" target="_blank">${a.title}</a>${a.artist_display_name ? ` <span class="artist">— ${a.artist_display_name}</span>` : ""}</li>`,
             )
             .join("");
-          return `
-          <div style="margin:12px 0;page-break-inside:avoid;border:1px solid #ddd;border-radius:8px;padding:12px 16px;">
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
-              <div style="width:28px;height:28px;border-radius:50%;background:#E31837;color:white;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;flex-shrink:0;">${globalIdx}</div>
-              <div>
-                <div style="font-weight:bold;font-size:15px;">${stop.stop_label}</div>
-                <div style="color:#666;font-size:12px;display:flex;align-items:center;gap:8px;">
-                  Floor ${stop.floor}
-                  ${galleryNum ? `<span style="background:#E31837;color:white;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:700;">Gallery ${galleryNum}</span>` : ""}
-                </div>
-              </div>
-            </div>
-            <ul style="margin:0;padding-left:52px;list-style:disc;">${artworkList}</ul>
-          </div>`;
+          return `<div class="stop">
+  <div class="stop-header">
+    <span class="stop-num">${stop.globalIndex + 1}</span>
+    <span class="stop-name">${stop.stop_label}</span>
+  </div>
+  <ul class="artworks">${artworkItems}</ul>
+</div>`;
         })
         .join("");
 
-      return `
-        <h2 style="font-size:18px;color:#E31837;margin-top:28px;margin-bottom:4px;">Floor ${f}</h2>
-        <div style="margin-bottom:12px;page-break-inside:avoid;background:#f8f6f1;border:1px solid #e0dcd4;border-radius:10px;padding:16px 20px;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-            <span style="font-size:18px;">🗺️</span>
-            <span style="font-weight:bold;font-size:14px;color:#1a1a1a;">Gallery Route — Floor ${f}</span>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;margin-bottom:12px;">${routeBubbles}</div>
-          <div style="border-top:1px solid #e0dcd4;padding-top:10px;display:flex;align-items:center;gap:8px;">
-            <span style="font-size:14px;">📍</span>
-            <span style="font-size:12px;color:#666;">View interactive map: </span>
-            <a href="${mapUrl}" style="font-size:12px;color:#E31837;font-weight:600;word-break:break-all;">${mapUrl}</a>
-          </div>
-        </div>
-        ${stopItems}`;
+      return `<h2>Floor ${f}</h2>
+<div class="map-wrap">${mapSvg}</div>
+${stopItems}`;
     })
     .join("");
+
+  const CREAM = "#F5F0E8";
+  const CHARCOAL = "#1A1A1A";
+  const GOLD = "#C9A84C";
+  const route = galleryRoute(stops);
 
   const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
-<title>Met Museum Tour</title>
+<title>Met Museum Tour${query ? ` — ${query}` : ""}</title>
 <style>
-  body{font-family:Georgia,serif;margin:40px;color:#1a1a1a;max-width:800px;margin-left:auto;margin-right:auto;}
-  h1{font-size:24px;border-bottom:2px solid #E31837;padding-bottom:8px;}
-  .summary{background:#f5f0e8;padding:12px 16px;border-radius:8px;margin:16px 0;font-size:13px;}
-  .print-btn{display:inline-flex;align-items:center;gap:6px;background:#E31837;color:white;border:none;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:24px;}
-  .print-btn:hover{opacity:.9;}
-  @media print{.no-print{display:none!important;}body{margin:20px;}a{color:#E31837!important;}}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:Georgia,"Times New Roman",serif;color:${CHARCOAL};background:${CREAM};max-width:840px;margin:0 auto;padding:48px 40px;}
+  h1{font-size:24px;font-weight:normal;letter-spacing:.02em;padding-bottom:12px;border-bottom:2px solid ${GOLD};margin-bottom:8px;}
+  .theme{font-size:15px;color:#555;margin-bottom:4px;font-style:italic;}
+  .meta{font-size:12px;color:#888;margin-bottom:36px;}
+  h2{font-size:10px;font-weight:bold;letter-spacing:.14em;text-transform:uppercase;color:${MET_RED};margin:40px 0 14px;}
+  .map-wrap{margin-bottom:28px;}
+  .stop{padding:12px 0;border-bottom:1px solid rgba(201,168,76,.25);}
+  .stop:last-child{border-bottom:none;}
+  .stop-header{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+  .stop-num{font-size:11px;font-weight:bold;color:white;background:${MET_RED};border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .stop-name{font-size:15px;font-weight:bold;}
+  .artworks{list-style:none;padding-left:32px;}
+  .artworks li{font-size:11px;line-height:1.7;}
+  .artworks a{color:${CHARCOAL};text-decoration:none;border-bottom:1px solid ${GOLD};}
+  .artist{color:#888;}
+  .excluded{font-size:12px;color:#aaa;text-align:center;margin-top:36px;padding-top:20px;border-top:1px solid rgba(201,168,76,.25);}
+  .print-btn{position:fixed;top:20px;right:20px;background:${MET_RED};color:white;border:none;padding:10px 22px;font-size:13px;font-family:Georgia,serif;cursor:pointer;letter-spacing:.06em;}
+  @media print{.print-btn{display:none!important;}body{padding:20px;background:white;}h2{margin-top:24px;}}
 </style>
 </head><body>
-  <div class="no-print">
-    <button class="print-btn" onclick="window.print()">🖨️ Save as PDF / Print</button>
-  </div>
-  <h1>🏛️ Met Museum Tour</h1>
-  ${query ? `<div style="font-size:15px;color:#555;margin-bottom:4px;">Theme: <em>${query}</em></div>` : ""}
-  <div class="summary">
-    <strong>${stops.length} stop${stops.length !== 1 ? "s" : ""}</strong> across ${floors.length} floor${floors.length !== 1 ? "s" : ""}
-    ${galleryRoute.length > 0 ? `<br/>Route: ${galleryRoute.join(" → ")}` : ""}
-  </div>
-  ${floorSections}
-  <p style="margin-top:32px;font-size:11px;color:#aaa;text-align:center;">Generated from Met Museum Tour Planner</p>
+<button class="print-btn" onclick="window.print()">Save as PDF</button>
+<h1>The Metropolitan Museum of Art</h1>
+${query ? `<p class="theme">${query}</p>` : ""}
+<p class="meta">${stops.length} stop${stops.length !== 1 ? "s" : ""} · ${floors.length} floor${floors.length !== 1 ? "s" : ""}${route.length > 0 ? ` · Galleries ${route.join(" → ")}` : ""}</p>
+${floorSections}
+${excludedCount > 0 ? `<p class="excluded">${excludedCount} artwork${excludedCount !== 1 ? "s" : ""} could not be located in the museum.</p>` : ""}
 </body></html>`;
 
   const blob = new Blob([html], { type: "text/html" });
   const url = URL.createObjectURL(blob);
   const win = window.open(url, "_blank");
-  if (!win) {
-    alert("Please allow popups to export your tour as PDF.");
-  }
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  if (!win) alert("Please allow popups to export your tour as PDF.");
+  setTimeout(() => URL.revokeObjectURL(url), 120_000);
 }
 
 export default function TourPanel({ artworks, query }: TourPanelProps) {
@@ -157,9 +181,13 @@ export default function TourPanel({ artworks, query }: TourPanelProps) {
     setState({ status: "idle" });
   }
 
-  const handleExportPDF = useCallback(() => {
+  const handleExportPDF = useCallback(async () => {
     if (state.status === "success") {
-      exportTourPDF(state.data.stops, query);
+      try {
+        await exportTourPDF(state.data.stops, query, state.data.excluded_count);
+      } catch {
+        alert("Could not generate PDF. Please try again.");
+      }
     }
   }, [state, query]);
 
@@ -219,9 +247,7 @@ export default function TourPanel({ artworks, query }: TourPanelProps) {
 
   // success
   const { data } = state;
-  const galleryNumbers = extractGalleryNumbers(
-    data.stops.map((s) => s.stop_label),
-  );
+  const route = galleryRoute(data.stops);
 
   return (
     <section className="bg-met-cream w-full px-4 py-6">
@@ -281,10 +307,10 @@ export default function TourPanel({ artworks, query }: TourPanelProps) {
             </div>
           </div>
 
-          {/* Gallery route summary */}
-          {galleryNumbers.length > 0 && (
-            <p className="text-sm text-met-charcoal/60 mb-4">
-              Galleries: {galleryNumbers.join(" → ")}
+          {/* Gallery route */}
+          {route.length > 0 && (
+            <p className="text-[11px] text-met-charcoal/50 mb-4 leading-relaxed tracking-wide">
+              {route.join(" · ")}
             </p>
           )}
 
