@@ -24,23 +24,51 @@ Also, if you don't have Node.js already, download it here: [nodejs.org](https://
 
 Now, assuming you're in the project directory and have replaced the embeddings directory with the files from Google Drive, proceed below!
 
+**1. Create and activate a virtual environment (from project root):**
+
 ```bash
-# In project root
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+```
+
+**2. Install root-level Python dependencies (notebooks, streamlit, ML utilities):**
+
+```bash
 pip install -r requirements.txt
 ```
 
+**3. Install backend Python dependencies (FastAPI, uvicorn, and related packages):**
+
+The backend has its own separate dependency set managed via `pyproject.toml`.
+
+```bash
+cd backend
+pip install .
+cd ..
+```
+
+**4. Install frontend dependencies:**
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+---
+
+**Starting the app** (requires the virtual environment to be active):
+
 ```bash
 # Terminal 1 — backend (from project root)
+source .venv/bin/activate
 cd backend
 uvicorn main:app --reload --port 8000
 ```
 
 ```bash
-# Terminal 2 — frontend (from frontend/)
+# Terminal 2 — frontend (from project root)
 cd frontend
-npm install
 npm run dev
 ```
 
