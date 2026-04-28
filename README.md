@@ -28,7 +28,7 @@ Queries are encoded into a 896-dimensional joint embedding space (CLIP + Sentenc
 > [!IMPORTANT]  
 > Most artifacts in `embeddings/metart/` are tracked in the repo, but `joint_embeddings.npy` is too large for GitHub. Download it from Google Drive and place it manually in `embeddings/metart/`
 > 
-> [Download](https://drive.google.com/drive/folders/1UqgmWO18c2PIWrXasvQcSkwSpj7BCA4B?usp=sharing)
+> [Download joint_embeddings.npy](https://drive.google.com/drive/folders/1UqgmWO18c2PIWrXasvQcSkwSpj7BCA4B?usp=sharing)
 
 After placing the file, your `embeddings/metart/` directory should look like this:
 
