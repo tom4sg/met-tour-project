@@ -7,6 +7,9 @@ requests>=2.31,<3
 jupyter>=1.0,<2
 ipykernel>=6.29,<7
 pandas>=2.0,<3
+umap-learn>=0.6.1,<1
+streamlit
+matplotlib
 
 # hugging face
 torch>=2.2,<3

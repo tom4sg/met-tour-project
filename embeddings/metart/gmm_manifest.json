@@ -1,0 +1,24 @@
+[
+  {
+    "space": "joint",
+    "n_components": 320,
+    "max_iter": 100,
+    "converged": false,
+    "n_iter": 100,
+    "artifacts": {
+      "npz": "gmm_joint_320_100.npz",
+      "indices_json": "gmm_joint_320_100_indices.json"
+    }
+  },
+  {
+    "space": "joint",
+    "n_components": 48,
+    "max_iter": 100,
+    "converged": false,
+    "n_iter": 100,
+    "artifacts": {
+      "npz": "gmm_joint_48_100.npz",
+      "indices_json": "gmm_joint_48_100_indices.json"
+    }
+  }
+]
