@@ -26,7 +26,8 @@ Queries are encoded into a 896-dimensional joint embedding space (CLIP + Sentenc
 ### 1. Add the joint embeddings file
 
 > [!IMPORTANT]  
-> Most artifacts in `embeddings/metart/` are tracked in the repo, but `joint_embeddings.npy` is too large for GitHub. Download it from Google Drive and place it manually in `embeddings/metart/`:
+> Most artifacts in `embeddings/metart/` are tracked in the repo, but `joint_embeddings.npy` is too large for GitHub. Download it from Google Drive and place it manually in `embeddings/metart/`
+> 
 > [Download joint_embeddings.npy](https://drive.google.com/drive/folders/1UqgmWO18c2PIWrXasvQcSkwSpj7BCA4B?usp=sharing)
 
 After placing the file, your `embeddings/metart/` directory should look like this:
@@ -100,7 +101,7 @@ cd ..
 
 ### Starting the app
 
-
+### Terminal 1
 
 **If using `uv`**
 ```bash
@@ -116,6 +117,7 @@ cd backend
 source ../.venv/bin/activate  # Windows: ..\.venv\Scripts\activate
 uvicorn main:app --reload --port 8000
 ```
+### Terminal 2
 
 ```bash
 # Terminal 2 — frontend
