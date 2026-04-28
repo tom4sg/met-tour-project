@@ -50,6 +50,18 @@ class QueryEncoder:
 
     # ── Private feature extractors ─────────────────────────────────────────
 
+    @staticmethod
+    def _extract_tensor(feat) -> "torch.Tensor":
+        """Handle both raw tensor and BaseModelOutputWithPooling return types."""
+        if isinstance(feat, torch.Tensor):
+            return feat
+        # transformers >= 4.x may return a dataclass with pooler_output or last_hidden_state
+        if hasattr(feat, "pooler_output") and feat.pooler_output is not None:
+            return feat.pooler_output
+        if hasattr(feat, "last_hidden_state"):
+            return feat.last_hidden_state[:, 0, :]
+        raise TypeError(f"Unexpected CLIP output type: {type(feat)}")
+
     def _clip_text_features(self, text: str) -> np.ndarray:
         """L2-normalized 512-dim CLIP text features."""
         inputs = self._clip_processor(
@@ -58,6 +70,7 @@ class QueryEncoder:
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
         with torch.inference_mode():
             feat = self._clip_model.get_text_features(**inputs)
+        feat = self._extract_tensor(feat)
         return _l2_normalize(feat.cpu().numpy().squeeze(0))
 
     def _clip_image_features(self, image: Image.Image) -> np.ndarray:
@@ -66,6 +79,7 @@ class QueryEncoder:
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
         with torch.inference_mode():
             feat = self._clip_model.get_image_features(**inputs)
+        feat = self._extract_tensor(feat)
         return _l2_normalize(feat.cpu().numpy().squeeze(0))
 
     def _st_text_features(self, text: str) -> np.ndarray:

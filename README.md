@@ -18,73 +18,124 @@ Queries are encoded into a 896-dimensional joint embedding space (CLIP + Sentenc
 
 ## Setup
 
-Before anything, make sure you have downloaded the required artifacts from Google Drive: [Download](https://drive.google.com/drive/folders/1UqgmWO18c2PIWrXasvQcSkwSpj7BCA4B?usp=sharing). The Drive contains an `embeddings/metart/` folder — place its contents into the `embeddings/metart/` directory in this repo (keep the directory structure intact! Do not replace the whole `embeddings/` folder, as the current path is important).
+### Prerequisites
 
-Also, if you don't have Node.js already, download it here: [nodejs.org](https://nodejs.org/en)
+- [Node.js](https://nodejs.org/en) (if not already installed)
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) or [pip](https://pypi.org/project/pip/) for Python dependency management
 
-Now, assuming you're in the project directory and have replaced the embeddings directory with the files from Google Drive, proceed below!
+### 1. Add the joint embeddings file
 
-**1. Create and activate a virtual environment (from project root):**
+> [!IMPORTANT]  
+> Most artifacts in `embeddings/metart/` are tracked in the repo, but `joint_embeddings.npy` is too large for GitHub. Download it from Google Drive and place it manually in `embeddings/metart/`:
+> [Download joint_embeddings.npy](https://drive.google.com/drive/folders/1UqgmWO18c2PIWrXasvQcSkwSpj7BCA4B?usp=sharing)
+
+After placing the file, your `embeddings/metart/` directory should look like this:
+
+```
+embeddings/metart/
+├── joint_embeddings.npy   ← download this from Google Drive
+├── gmm_joint_48_100.npz
+├── gmm_joint_48_100_indices.json
+├── gmm_joint_320_100.npz
+├── gmm_joint_320_100_indices.json
+├── gmm_manifest.json
+├── metadata.csv
+└── metadata_post_embedding.csv
+```
+
+### 2. Install root-level Python dependencies
+
+Required for notebooks, the Streamlit app, and the embedding pipeline in `src/`:
+
+**Option A — uv**
+
+```bash
+uv venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+uv pip install -r requirements.txt
+```
+
+**Option B — pip**
+
+First, create and activate a virtual environment from the project root:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ```
 
-**2. Install root-level Python dependencies (notebooks, streamlit, ML utilities):**
+Then install:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**3. Install backend Python dependencies (FastAPI, uvicorn, and related packages):**
+### 3. Install backend dependencies
 
-The backend has its own separate dependency set managed via `pyproject.toml`.
+**Option A — uv**
 
 ```bash
 cd backend
-pip install .
+uv sync
 cd ..
 ```
 
-**4. Install frontend dependencies:**
+**Option B — pip**
+
+```bash
+cd backend
+pip install -e .
+cd ..
+```
+
+### 4. Install frontend dependencies
 
 ```bash
 cd frontend
-npm install
+npm i
 cd ..
 ```
 
 ---
 
-**Starting the app** (requires the virtual environment to be active):
+### Starting the app
 
+
+
+**If using `uv`**
 ```bash
-# Terminal 1 — backend (from project root)
-source .venv/bin/activate
+# Terminal 1 — backend
 cd backend
+uv run uvicorn main:app --reload --port 8000
+```
+
+**If using `pip`**
+```bash
+# Terminal 1 — backend
+cd backend
+source ../.venv/bin/activate  # Windows: ..\.venv\Scripts\activate
 uvicorn main:app --reload --port 8000
 ```
 
 ```bash
-# Terminal 2 — frontend (from project root)
+# Terminal 2 — frontend
 cd frontend
 npm run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000) in your browser.
+Then open [http://localhost:3000](http://localhost:3000).
 
 ---
 
 ## Project Structure
 
 ```
-backend/          FastAPI search + tour routing API
-frontend/         Next.js web app
+backend/           FastAPI search + tour routing API
+frontend/          Next.js web app
 src/
-  embedding/      Embedding pipeline (CLIP + Sentence-BERT)
-  search/         GMM clustering, retrieval logic
-  tuning/         BIC sweep for GMM hyperparameter selection
-embeddings/metart/ Pre-built artifacts (downloaded from Google Drive)
-notebooks/        EDA and GMM analysis notebooks
+  embedding/       Embedding pipeline (CLIP + Sentence-BERT)
+  search/          GMM clustering, retrieval logic
+  tuning/          BIC sweep for GMM hyperparameter selection
+embeddings/metart/ Pre-built artifacts (npz + json tracked; npy downloaded separately)
+notebooks/         EDA and GMM analysis notebooks
 ```
